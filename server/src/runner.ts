@@ -122,8 +122,23 @@ export function loadPersistedJobs(): void {
   } catch { /* ignore */ }
 }
 
+/**
+ * Step a job is currently executing, by job id. Every log line emitted while a step is running is
+ * tagged with it so the UI can filter the terminal down to one step. A step becomes current when it
+ * goes 'running' and stops being current when it reaches a terminal state, so lines produced between
+ * steps (account headers, job-level errors) stay untagged.
+ */
+const currentStep = new Map<string, string>();
+
+const TERMINAL_STEP_STATES = ['succeeded', 'failed', 'skipped', 'warning'];
+
 function addLog(job: Job, stream: 'stdout' | 'stderr' | 'app', line: string, step?: string): void {
-  const entry: LogLine = { ts: new Date().toISOString(), stream, step, line: redact(line) };
+  const entry: LogLine = {
+    ts: new Date().toISOString(),
+    stream,
+    step: step ?? currentStep.get(job.id),
+    line: redact(line),
+  };
   job.logs.push(entry);
   emit(job.id, 'log', entry);
 }
@@ -132,9 +147,16 @@ function updateStep(job: Job, stepId: string, update: Partial<Step>): void {
   const step = job.steps.find((s) => s.id === stepId);
   if (!step) return;
   Object.assign(step, update);
-  if (update.state === 'running') step.startedAt = new Date().toISOString();
-  if (['succeeded', 'failed', 'skipped', 'warning'].includes(update.state ?? ''))
+  if (update.state === 'running') {
+    step.startedAt = new Date().toISOString();
+    currentStep.set(job.id, stepId);
+  }
+  if (TERMINAL_STEP_STATES.includes(update.state ?? '')) {
     step.endedAt = new Date().toISOString();
+    // Only the running step clears the marker: bulk 'skipped' updates for downstream steps
+    // must not detach logs from whichever step is still executing.
+    if (currentStep.get(job.id) === stepId) currentStep.delete(job.id);
+  }
   emit(job.id, 'step', step);
 }
 
@@ -900,6 +922,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
     clearAllPasswords();
     updateJobState(job, 'failed');
   } finally {
+    currentStep.delete(job.id);
     persistJob(job);
     activeJobId = null;
 

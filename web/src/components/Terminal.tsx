@@ -37,8 +37,13 @@ export function Terminal({ logs, filterStep, height = 340 }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
+  // Jobs that ran before output was tagged per step have no `step` on any line — filtering those
+  // down to a selected step would blank the panel, so the step filter simply doesn't apply to them.
+  const stepTagged = logs.some((l) => l.step);
+  const stepFilter = stepTagged ? filterStep : undefined;
+
   const displayed = logs.filter((l) => {
-    if (filterStep && l.step && l.step !== filterStep) return false;
+    if (stepFilter && l.step !== stepFilter) return false;
     if (filter && !l.line.toLowerCase().includes(filter.toLowerCase())) return false;
     return true;
   });
@@ -107,6 +112,10 @@ export function Terminal({ logs, filterStep, height = 340 }: Props) {
           lines
         </span>
 
+        {filterStep && !stepTagged && (
+          <span className="text-[11px] text-warn">Output isn’t tagged by step for this job</span>
+        )}
+
         <div className="ml-auto flex items-center gap-1">
           <Tooltip content={copied ? 'Copied' : 'Copy visible lines'}>
             <Button size="sm" variant="ghost" onClick={copyAll} aria-label="Copy log">
@@ -132,7 +141,11 @@ export function Terminal({ logs, filterStep, height = 340 }: Props) {
           <div className="flex h-full flex-col items-center justify-center gap-2 text-fg-faint">
             <TerminalIcon className="size-5" />
             <span className="text-xs">
-              {logs.length === 0 ? 'Waiting for output…' : 'No lines match the current filter'}
+              {logs.length === 0
+                ? 'Waiting for output…'
+                : stepFilter && !filter
+                  ? 'This step produced no output'
+                  : 'No lines match the current filter'}
             </span>
           </div>
         ) : (
