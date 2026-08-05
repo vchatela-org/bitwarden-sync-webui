@@ -37,6 +37,7 @@ export interface DiffResult {
 export interface CredentialPrompt {
   kind: 'credentials';
   accountKey: string;
+  targets: string[];
   side: 'cloud' | 'home';
   needsOtp: boolean;
   otpMethod?: number;
@@ -62,6 +63,7 @@ export interface Job {
   steps: Step[];
   logs: LogLine[];
   prompt?: Prompt;
+  results?: Record<string, { cloud?: number; home?: number }>;
 }
 
 export interface UserConfig {
@@ -123,6 +125,25 @@ export interface BackupSet {
 export interface BackupInventory {
   managed: BackupSet[];
   unmanaged: string[];
+}
+
+export interface IntegrityResult {
+  path: string;
+  ok: boolean;
+  reason?: string;
+}
+
+export interface PruneCandidate {
+  targetKey: string;
+  timestamp: string;
+  files: string[];
+  sizeBytes: number;
+}
+
+export interface PruneSummary {
+  toDelete: PruneCandidate[];
+  totalBytes: number;
+  dryRun: boolean;
 }
 
 export type VaultStatus = {

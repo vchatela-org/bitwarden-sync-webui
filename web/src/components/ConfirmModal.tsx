@@ -1,12 +1,20 @@
 import React, { useState } from 'react';
-import { ConfirmationPrompt } from '../types.js';
+import { ShieldAlert, ArrowRight, AlertCircle, Minus, Plus } from 'lucide-react';
+import { ConfirmationPrompt, DiffItem } from '../types.js';
 import { submitConfirmation } from '../api.js';
+import { Modal } from './ui/Modal.js';
+import { Button } from './ui/Button.js';
+import { Alert } from './ui/Input.js';
+import { cn } from '../lib/cn.js';
 
 interface Props {
   jobId: string;
   prompt: ConfirmationPrompt;
   onSubmitted: () => void;
 }
+
+const REMOVED_PREVIEW = 10;
+const ADDED_PREVIEW = 5;
 
 export function ConfirmModal({ jobId, prompt, onSubmitted }: Props) {
   const [loading, setLoading] = useState(false);
@@ -20,111 +28,173 @@ export function ConfirmModal({ jobId, prompt, onSubmitted }: Props) {
       await submitConfirmation(jobId, prompt.target, decision);
       onSubmitted();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed');
+      const message = err instanceof Error ? err.message : 'Failed to submit decision';
+      if (/no pending confirmation|not awaiting confirmation/i.test(message)) {
+        onSubmitted();
+        return;
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
   }
 
-  const srcCount = diff.sourceCount === 'unknown' ? '?' : diff.sourceCount;
-  const ratio = diff.sourceCount !== 'unknown' && diff.destCount > 0
-    ? Math.round((diff.sourceCount / diff.destCount) * 100)
-    : null;
+  const srcKnown = diff.sourceCount !== 'unknown';
+  const ratio =
+    srcKnown && diff.destCount > 0
+      ? Math.round(((diff.sourceCount as number) / diff.destCount) * 100)
+      : null;
 
   return (
-    <div style={styles.overlay}>
-      <div style={styles.modal}>
-        <h2 style={styles.title}>⚠️ Import Guard Tripped</h2>
-        <p style={styles.subtitle}>
-          Target: <strong style={{ color: '#60a5fa' }}>{prompt.target}</strong>
-        </p>
-        <div style={styles.reason}>{diff.guardReason}</div>
+    <Modal
+      open
+      icon={<ShieldAlert />}
+      iconTone="warn"
+      title="Import guard tripped"
+      description={
+        <>
+          The import into <strong className="font-medium text-fg">{prompt.target}</strong> looks
+          destructive and was paused for review.
+        </>
+      }
+      className="w-[min(calc(100vw-2rem),36rem)]"
+      footer={
+        <>
+          <Button variant="ghost" onClick={() => decide('abort')} disabled={loading}>
+            Abort job
+          </Button>
+          <Button variant="default" onClick={() => decide('skip')} disabled={loading}>
+            Skip this target
+          </Button>
+          <Button variant="danger" onClick={() => decide('proceed')} loading={loading}>
+            Purge &amp; import anyway
+          </Button>
+        </>
+      }
+    >
+      <div className="space-y-4 pb-4">
+        {diff.guardReason && (
+          <Alert tone="warn" icon={<AlertCircle />}>
+            {diff.guardReason}
+          </Alert>
+        )}
 
-        <div style={styles.counts}>
-          <div style={styles.countBox}>
-            <div style={styles.countNum}>{srcCount}</div>
-            <div style={styles.countLabel}>Source items</div>
+        {/* Source → destination counts */}
+        <div className="flex items-stretch gap-2">
+          <CountBox label="Source" value={srcKnown ? (diff.sourceCount as number) : '?'} />
+          <div className="flex items-center">
+            <ArrowRight className="size-4 text-fg-faint" />
           </div>
-          <div style={styles.arrow}>→</div>
-          <div style={styles.countBox}>
-            <div style={styles.countNum}>{diff.destCount}</div>
-            <div style={styles.countLabel}>Destination items</div>
-          </div>
+          <CountBox label="Destination" value={diff.destCount} />
           {ratio !== null && (
-            <div style={styles.countBox}>
-              <div style={{ ...styles.countNum, color: ratio < 50 ? '#f87171' : '#facc15' }}>{ratio}%</div>
-              <div style={styles.countLabel}>Ratio</div>
-            </div>
+            <CountBox
+              label="Ratio"
+              value={`${ratio}%`}
+              tone={ratio < 50 ? 'danger' : ratio < 90 ? 'warn' : 'ok'}
+            />
           )}
         </div>
 
-        {diff.removed.length > 0 && (
-          <div style={styles.diffSection}>
-            <div style={styles.diffLabel}>🔴 Would be removed ({diff.removed.length} shown):</div>
-            <div style={styles.diffList}>
-              {diff.removed.slice(0, 10).map((item, i) => (
-                <div key={i} style={styles.diffItem}>{item.name}{item.username ? ` (${item.username})` : ''}</div>
-              ))}
-              {diff.removed.length > 10 && <div style={styles.moreItems}>…and {diff.removed.length - 10} more</div>}
-            </div>
-          </div>
+        <DiffList
+          tone="danger"
+          icon={<Minus className="size-3" strokeWidth={3} />}
+          title="Would be removed"
+          items={diff.removed}
+          preview={REMOVED_PREVIEW}
+        />
+        <DiffList
+          tone="ok"
+          icon={<Plus className="size-3" strokeWidth={3} />}
+          title="Would be added"
+          items={diff.added}
+          preview={ADDED_PREVIEW}
+        />
+
+        {diff.unchanged > 0 && (
+          <p className="text-xs text-fg-subtle">
+            <span className="tabular-nums text-fg-muted">{diff.unchanged.toLocaleString()}</span>{' '}
+            item{diff.unchanged === 1 ? '' : 's'} unchanged.
+          </p>
         )}
 
-        {diff.added.length > 0 && (
-          <div style={styles.diffSection}>
-            <div style={styles.diffLabel}>🟢 Would be added ({diff.added.length} shown):</div>
-            <div style={styles.diffList}>
-              {diff.added.slice(0, 5).map((item, i) => (
-                <div key={i} style={styles.diffItem}>{item.name}{item.username ? ` (${item.username})` : ''}</div>
-              ))}
-              {diff.added.length > 5 && <div style={styles.moreItems}>…and {diff.added.length - 5} more</div>}
-            </div>
-          </div>
-        )}
+        {error && <Alert icon={<AlertCircle />}>{error}</Alert>}
 
-        {error && <div style={styles.error}>{error}</div>}
-
-        <div style={styles.warning}>
-          ⚠️ Choosing <strong>Proceed</strong> will purge the home vault and re-import. This cannot be undone.
+        <div className="rounded-lg border border-danger-line bg-danger-soft px-3 py-2.5 text-[12px] leading-relaxed text-danger">
+          <strong className="font-semibold">Purge &amp; import</strong> deletes every item in the
+          home vault for this target before re-importing. There is no undo — the newest backup set
+          is the only way back.
         </div>
+      </div>
+    </Modal>
+  );
+}
 
-        <div style={styles.buttons}>
-          <button style={{ ...styles.btn, ...styles.btnDanger }} onClick={() => decide('proceed')} disabled={loading}>
-            Proceed anyway
-          </button>
-          <button style={{ ...styles.btn, ...styles.btnSecondary }} onClick={() => decide('skip')} disabled={loading}>
-            Skip target
-          </button>
-          <button style={{ ...styles.btn, ...styles.btnAbort }} onClick={() => decide('abort')} disabled={loading}>
-            Abort job
-          </button>
-        </div>
+function CountBox({
+  label,
+  value,
+  tone = 'neutral',
+}: {
+  label: string;
+  value: React.ReactNode;
+  tone?: 'neutral' | 'ok' | 'warn' | 'danger';
+}) {
+  const toneText = {
+    neutral: 'text-fg',
+    ok: 'text-ok',
+    warn: 'text-warn',
+    danger: 'text-danger',
+  }[tone];
+
+  return (
+    <div className="flex-1 rounded-lg border border-line bg-surface-2 px-3 py-2.5 text-center">
+      <div className={cn('text-xl font-semibold tabular-nums tracking-tight', toneText)}>{value}</div>
+      <div className="mt-0.5 text-[10px] font-medium uppercase tracking-[0.06em] text-fg-subtle">
+        {label}
       </div>
     </div>
   );
 }
 
-const styles: Record<string, React.CSSProperties> = {
-  overlay: { position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000 },
-  modal: { background: '#1a1d27', border: '1px solid #2d3148', borderRadius: 12, padding: '32px 40px', width: 520, maxHeight: '80vh', overflowY: 'auto', boxShadow: '0 16px 48px rgba(0,0,0,0.6)' },
-  title: { color: '#f59e0b', margin: 0, fontSize: 20 },
-  subtitle: { color: '#94a3b8', fontSize: 13, margin: '10px 0 4px' },
-  reason: { color: '#f87171', fontSize: 13, background: '#2d1515', padding: '8px 12px', borderRadius: 6, marginBottom: 16 },
-  counts: { display: 'flex', gap: 12, alignItems: 'center', marginBottom: 16 },
-  countBox: { textAlign: 'center', background: '#12151e', padding: '12px 16px', borderRadius: 8, flex: 1 },
-  countNum: { fontSize: 28, fontWeight: 700, color: '#e2e8f0' },
-  countLabel: { color: '#64748b', fontSize: 11, marginTop: 4 },
-  arrow: { color: '#475569', fontSize: 20 },
-  diffSection: { marginBottom: 12 },
-  diffLabel: { color: '#94a3b8', fontSize: 12, marginBottom: 4 },
-  diffList: { background: '#12151e', borderRadius: 6, padding: '8px 12px' },
-  diffItem: { color: '#cbd5e1', fontSize: 12, padding: '2px 0' },
-  moreItems: { color: '#475569', fontSize: 11, marginTop: 4 },
-  warning: { color: '#f59e0b', fontSize: 12, background: '#2d1f00', padding: '8px 12px', borderRadius: 6, margin: '16px 0' },
-  error: { color: '#f87171', fontSize: 13, marginTop: 8 },
-  buttons: { display: 'flex', gap: 8, justifyContent: 'flex-end', flexWrap: 'wrap' },
-  btn: { padding: '9px 16px', border: 'none', borderRadius: 6, cursor: 'pointer', fontSize: 13, fontWeight: 600 },
-  btnDanger: { background: '#dc2626', color: '#fff' },
-  btnSecondary: { background: '#1e2235', color: '#94a3b8', border: '1px solid #2d3148' },
-  btnAbort: { background: '#7f1d1d', color: '#fca5a5' },
-};
+function DiffList({
+  tone,
+  icon,
+  title,
+  items,
+  preview,
+}: {
+  tone: 'ok' | 'danger';
+  icon: React.ReactNode;
+  title: string;
+  items: DiffItem[];
+  preview: number;
+}) {
+  if (items.length === 0) return null;
+
+  const toneText = tone === 'ok' ? 'text-ok' : 'text-danger';
+  const toneChip = tone === 'ok' ? 'bg-ok-soft text-ok' : 'bg-danger-soft text-danger';
+
+  return (
+    <div>
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <span className={cn('flex size-4 items-center justify-center rounded', toneChip)}>{icon}</span>
+        <span className="text-xs font-medium text-fg-muted">{title}</span>
+        <span className={cn('text-xs font-semibold tabular-nums', toneText)}>{items.length}</span>
+      </div>
+      <div className="scrollbar-thin max-h-40 overflow-y-auto rounded-lg border border-line bg-surface-2 px-3 py-2">
+        {items.slice(0, preview).map((item, i) => (
+          <div key={i} className="flex items-baseline gap-2 py-0.5 text-xs">
+            <span className="truncate text-fg">{item.name}</span>
+            {item.username && (
+              <span className="shrink-0 font-mono text-[11px] text-fg-subtle">{item.username}</span>
+            )}
+          </div>
+        ))}
+        {items.length > preview && (
+          <div className="mt-1 text-[11px] text-fg-faint">
+            …and {items.length - preview} more
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

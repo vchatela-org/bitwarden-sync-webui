@@ -1,4 +1,4 @@
-import { AppConfig, Job, BackupInventory, TargetStatus } from './types.js';
+import { AppConfig, Job, BackupInventory, TargetStatus, IntegrityResult, PruneSummary } from './types.js';
 
 let csrfToken: string | null = null;
 
@@ -82,15 +82,15 @@ export async function getBackups(): Promise<BackupInventory> {
   return fetchJson<BackupInventory>('/api/backups');
 }
 
-export async function verifyBackups(target?: string): Promise<{ results: Array<{ path: string; ok: boolean; reason?: string }> }> {
+export async function verifyBackups(target?: string): Promise<{ results: IntegrityResult[] }> {
   return fetchJson('/api/backups/verify', {
     method: 'POST',
     body: JSON.stringify({ target }),
   });
 }
 
-export async function pruneBackups(opts: { target?: string; keepDaily?: number; keepMonthly?: number; dryRun?: boolean }): Promise<unknown> {
-  return fetchJson('/api/backups/prune', {
+export async function pruneBackups(opts: { target?: string; keepDaily?: number; keepMonthly?: number; dryRun?: boolean }): Promise<PruneSummary> {
+  return fetchJson<PruneSummary>('/api/backups/prune', {
     method: 'POST',
     body: JSON.stringify(opts),
   });

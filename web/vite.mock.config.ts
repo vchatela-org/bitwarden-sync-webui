@@ -1,0 +1,145 @@
+// TEMPORARY: local visual harness. Serves fixture data on /api so the UI can be
+// reviewed without a live backend + Bitwarden CLI. Delete after review.
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
+import type { Connect } from 'vite';
+
+const config = {
+  cloudServerUrl: 'https://vault.bitwarden.eu',
+  homeServerUrl: 'https://vault.home.lan',
+  users: [
+    { key: 'alice', email: 'alice@example.com', displayName: 'Alice Martin' },
+    { key: 'bob', email: 'bob@example.com' },
+  ],
+  orgs: [
+    { key: 'acme-org', name: 'Acme Corporation', owner: 'alice' },
+    { key: 'side-project', name: 'Side Project', owner: 'alice' },
+    { key: 'bob-org', name: 'Bob Holdings', owner: 'bob' },
+  ],
+  retention: { keepDaily: 7, keepMonthly: 6 },
+  importGuard: { minSourceRatio: 0.5, blockOnEmptySource: true },
+  homeLogoutAfterImport: true,
+  cliVersion: '2026.7.0',
+};
+
+const ts = (daysAgo: number) => {
+  const d = new Date(Date.now() - daysAgo * 86_400_000);
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}${p(d.getUTCMonth() + 1)}${p(d.getUTCDate())}_${p(d.getUTCHours())}${p(d.getUTCMinutes())}00`;
+};
+
+const set = (targetKey: string, kind: 'user' | 'org', daysAgo: number, items: number, bytes: number) => ({
+  targetKey,
+  kind,
+  timestamp: ts(daysAgo),
+  files: [
+    { path: `/backups/${targetKey}_${ts(daysAgo)}.json`, filename: 'x.json', targetKey, kind, timestamp: ts(daysAgo), fileType: 'export', sizeBytes: bytes },
+    { path: `/backups/${targetKey}_${ts(daysAgo)}.meta.json`, filename: 'x.meta.json', targetKey, kind, timestamp: ts(daysAgo), fileType: 'meta', sizeBytes: 412 },
+  ],
+  sizeBytes: bytes,
+  meta: { target: targetKey, kind, timestamp: ts(daysAgo), itemCount: items, folderCount: 12, sourceServer: 'https://vault.bitwarden.eu', cliVersion: '2026.7.0', sizeBytes: bytes },
+});
+
+const backups = {
+  managed: [
+    set('alice', 'user', 0.2, 412, 884_000),
+    set('alice', 'user', 1.2, 410, 880_100),
+    set('alice', 'user', 3.2, 402, 871_400),
+    set('acme-org', 'org', 0.3, 871, 1_942_000),
+    set('acme-org', 'org', 4.3, 864, 1_930_500),
+    set('side-project', 'org', 9.5, 63, 121_000),
+    set('bob', 'user', 2.1, 188, 402_300),
+  ],
+  unmanaged: ['/backups/legacy-dump-2024.json', '/backups/manual_export.json'],
+};
+
+const steps = (n: number) =>
+  Array.from({ length: n }, (_, i) => ({
+    id: `s${i}`,
+    label: ['Unlock cloud vault', 'Sync vault', 'Export items', 'Write backup set', 'Verify checksum', 'Unlock home vault', 'Diff against home', 'Purge home vault', 'Import items'][i % 9],
+    state: i < 4 ? 'succeeded' : i === 4 ? 'running' : 'pending',
+    group: i < 5 ? 'alice — cloud' : 'alice — home',
+    startedAt: new Date(Date.now() - (n - i) * 4000).toISOString(),
+    endedAt: i < 4 ? new Date(Date.now() - (n - i) * 3000).toISOString() : undefined,
+    detail: i === 2 ? 'exported 412 items, 12 folders' : undefined,
+  }));
+
+const logs = Array.from({ length: 40 }, (_, i) => ({
+  ts: new Date(Date.now() - (40 - i) * 1500).toISOString(),
+  stream: i % 11 === 0 ? 'app' : i % 17 === 0 ? 'stderr' : 'stdout',
+  step: `s${Math.floor(i / 5)}`,
+  line: i % 17 === 0
+    ? 'warning: collection "Shared" already exists, reusing id'
+    : `[${i}] bw export --organizationid 4f2a --format json --output /backups/alice_export.json`,
+}));
+
+const jobs = [
+  { id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', createdAt: new Date(Date.now() - 90_000).toISOString(), startedAt: new Date(Date.now() - 88_000).toISOString(), state: 'running', targets: ['alice', 'acme-org'], operations: ['both'], options: {}, steps: steps(9), logs },
+  { id: 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', createdAt: new Date(Date.now() - 3_600_000).toISOString(), startedAt: new Date(Date.now() - 3_599_000).toISOString(), endedAt: new Date(Date.now() - 3_480_000).toISOString(), state: 'succeeded', targets: ['alice'], operations: ['backup'], options: {}, steps: steps(5).map((s) => ({ ...s, state: 'succeeded' })), logs: [] },
+  { id: 'c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f', createdAt: new Date(Date.now() - 86_400_000).toISOString(), startedAt: new Date(Date.now() - 86_399_000).toISOString(), endedAt: new Date(Date.now() - 86_100_000).toISOString(), state: 'failed', targets: ['bob', 'bob-org'], operations: ['import'], options: {}, steps: steps(6).map((s, i) => ({ ...s, state: i < 3 ? 'succeeded' : i === 3 ? 'failed' : 'skipped' })), logs: [] },
+  { id: 'd4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f80', createdAt: new Date(Date.now() - 172_800_000).toISOString(), startedAt: new Date(Date.now() - 172_799_000).toISOString(), endedAt: new Date(Date.now() - 172_500_000).toISOString(), state: 'partial', targets: ['alice', 'bob', 'acme-org'], operations: ['backup'], options: {}, steps: steps(7).map((s, i) => ({ ...s, state: i === 5 ? 'warning' : 'succeeded' })), logs: [] },
+];
+
+const status = {
+  alice: {
+    cloud: { status: 'unlocked', serverUrl: config.cloudServerUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 3_600_000).toISOString() },
+    home: { status: 'locked', serverUrl: config.homeServerUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 90_000_000).toISOString() },
+  },
+  bob: {
+    cloud: { status: 'unauthenticated', serverUrl: config.cloudServerUrl },
+    home: null,
+  },
+  'acme-org': {
+    cloud: { status: 'unlocked', serverUrl: config.cloudServerUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 7_200_000).toISOString() },
+    home: { status: 'unlocked', serverUrl: config.homeServerUrl, lastSync: new Date(Date.now() - 7_200_000).toISOString() },
+  },
+};
+
+function mockApi(): { name: string; configureServer: (s: { middlewares: Connect.Server }) => void } {
+  return {
+    name: 'mock-api',
+    configureServer(server) {
+      server.middlewares.use('/api', (req, res, next) => {
+        const url = (req.url ?? '').split('?')[0]!;
+        const send = (body: unknown) => {
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(body));
+        };
+        if (url === '/auth/me') return send({ authenticated: true, csrfToken: 'mock' });
+        if (url === '/auth/login') return send({ ok: true, csrfToken: 'mock' });
+        if (url === '/auth/logout') return send({ ok: true });
+        if (url === '/config') return send(config);
+        if (url === '/status') return send(status);
+        if (url === '/backups') return send(backups);
+        if (url === '/backups/verify') {
+          return send({
+            results: [
+              ...backups.managed.slice(0, 5).map((s) => ({ path: s.files[0]!.path, ok: true })),
+              { path: '/backups/side-project_20260727_0300.json', ok: false, reason: 'SHA256 mismatch' },
+            ],
+          });
+        }
+        if (url === '/backups/prune') {
+          const doomed = backups.managed.slice(4);
+          return send({
+            toDelete: doomed.map((s) => ({ targetKey: s.targetKey, timestamp: s.timestamp, files: s.files.map((f) => f.path), sizeBytes: s.sizeBytes })),
+            totalBytes: doomed.reduce((a, s) => a + s.sizeBytes, 0),
+            dryRun: true,
+          });
+        }
+        if (url === '/jobs') return send(jobs);
+        if (url.startsWith('/jobs/')) {
+          const id = url.split('/')[2];
+          return send(jobs.find((j) => j.id === id) ?? jobs[0]);
+        }
+        next();
+      });
+    },
+  };
+}
+
+export default defineConfig({
+  plugins: [react(), tailwindcss(), mockApi()],
+  server: { port: 5199 },
+});

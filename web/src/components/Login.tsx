@@ -1,5 +1,8 @@
 import React, { useState } from 'react';
+import { ShieldCheck, AlertCircle, ArrowRight } from 'lucide-react';
 import { login } from '../api.js';
+import { Button } from './ui/Button.js';
+import { Input, Field, Alert } from './ui/Input.js';
 
 interface Props {
   onLogin: () => void;
@@ -25,89 +28,61 @@ export function Login({ onLogin }: Props) {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.card}>
-        <h1 style={styles.title}>🔐 Bitwarden Sync</h1>
-        <p style={styles.subtitle}>Self-hosted vault synchronisation</p>
-        <form onSubmit={handleSubmit}>
-          <label style={styles.label}>UI Password</label>
-          <input
-            type="password"
-            value={password}
-            onChange={(e) => setPassword(e.target.value)}
-            style={styles.input}
-            placeholder="Enter UI password"
-            autoFocus
-          />
-          {error && <div style={styles.error}>{error}</div>}
-          <button type="submit" disabled={loading || !password} style={styles.button}>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden px-4">
+      {/* Ambient accent glow behind the card */}
+      <div
+        aria-hidden
+        className="pointer-events-none absolute left-1/2 top-1/2 size-[36rem] -translate-x-1/2 -translate-y-[60%] rounded-full opacity-50 blur-[120px]"
+        style={{
+          background:
+            'radial-gradient(circle, var(--color-accent) 0%, transparent 65%)',
+        }}
+      />
+
+      <div className="relative w-full max-w-sm animate-rise">
+        <div className="mb-7 flex flex-col items-center text-center">
+          <div className="mb-4 flex size-12 items-center justify-center rounded-2xl border border-accent-line bg-accent-soft shadow-pop">
+            <ShieldCheck className="size-6 text-accent" />
+          </div>
+          <h1 className="text-xl font-semibold tracking-tight text-fg">Bitwarden Sync</h1>
+          <p className="mt-1.5 text-[13px] text-fg-subtle">Self-hosted vault synchronisation</p>
+        </div>
+
+        <form
+          onSubmit={handleSubmit}
+          className="space-y-4 rounded-2xl border border-line bg-surface p-6 shadow-modal"
+        >
+          <Field label="UI password" htmlFor="ui-password">
+            <Input
+              id="ui-password"
+              type="password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              placeholder="••••••••••••"
+              autoFocus
+              autoComplete="current-password"
+              invalid={!!error}
+            />
+          </Field>
+
+          {error && <Alert icon={<AlertCircle />}>{error}</Alert>}
+
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={!password}
+            loading={loading}
+            className="h-9.5 w-full justify-center text-sm"
+          >
             {loading ? 'Signing in…' : 'Sign in'}
-          </button>
+            {!loading && <ArrowRight className="size-3.5" />}
+          </Button>
         </form>
+
+        <p className="mt-5 text-center text-[11px] text-fg-faint">
+          Vault master passwords are never stored — they are requested per job.
+        </p>
       </div>
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: '#0f1117',
-  },
-  card: {
-    background: '#1a1d27',
-    border: '1px solid #2d3148',
-    borderRadius: 12,
-    padding: '40px 48px',
-    width: 360,
-    boxShadow: '0 8px 32px rgba(0,0,0,0.4)',
-  },
-  title: {
-    color: '#e2e8f0',
-    margin: 0,
-    fontSize: 24,
-    fontWeight: 700,
-  },
-  subtitle: {
-    color: '#64748b',
-    margin: '8px 0 28px',
-    fontSize: 14,
-  },
-  label: {
-    display: 'block',
-    color: '#94a3b8',
-    fontSize: 13,
-    marginBottom: 6,
-  },
-  input: {
-    width: '100%',
-    padding: '10px 12px',
-    background: '#0f1117',
-    border: '1px solid #2d3148',
-    borderRadius: 6,
-    color: '#e2e8f0',
-    fontSize: 14,
-    boxSizing: 'border-box',
-    outline: 'none',
-  },
-  error: {
-    color: '#f87171',
-    fontSize: 13,
-    marginTop: 8,
-  },
-  button: {
-    marginTop: 16,
-    width: '100%',
-    padding: '10px',
-    background: '#4f46e5',
-    border: 'none',
-    borderRadius: 6,
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-};

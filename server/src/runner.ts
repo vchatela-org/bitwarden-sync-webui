@@ -13,7 +13,7 @@ import { redact } from './redact.js';
 import { createHash } from 'crypto';
 import { statSync } from 'fs';
 
-export type JobOperation = 'backup' | 'import' | 'both' | 'status' | 'diff';
+export type JobOperation = 'backup' | 'import' | 'both' | 'status' | 'diff' | 'count';
 export type JobState = 'queued' | 'running' | 'awaiting-credentials' | 'awaiting-confirmation' | 'succeeded' | 'failed' | 'partial' | 'aborted';
 // Use a separate variable to track aborted state at runtime (the type above does include 'aborted')
 export type StepState = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'warning' | 'awaiting-input';
@@ -38,6 +38,7 @@ export interface LogLine {
 export interface CredentialPrompt {
   kind: 'credentials';
   accountKey: string;
+  targets: string[];
   side: 'cloud' | 'home';
   needsOtp: boolean;
   otpMethod?: number;
@@ -63,6 +64,7 @@ export interface Job {
   steps: Step[];
   logs: LogLine[];
   prompt?: Prompt;
+  results?: Record<string, { cloud?: number; home?: number }>;
 }
 
 export interface JobOptions {
@@ -192,6 +194,7 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
   const steps: Step[] = [];
   const doBackup = ops.includes('backup') || ops.includes('both');
   const doImport = ops.includes('import') || ops.includes('both');
+  const doCount = ops.includes('count');
 
   for (const [account, groupTargets] of groups) {
     const g = account;
@@ -225,6 +228,21 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
         steps.push({ id: `${g}:home:logout`, label: `[${g}] Home logout`, state: 'pending', group: g });
       }
     }
+    if (doCount) {
+      steps.push({ id: `${g}:count:cloud:login`, label: `[${g}] Cloud login`, state: 'pending', group: g });
+      steps.push({ id: `${g}:count:cloud:sync`, label: `[${g}] Cloud sync`, state: 'pending', group: g });
+      for (const t of groupTargets) {
+        steps.push({ id: `${g}:count:cloud:${t}`, label: `[${t}] Count cloud items`, state: 'pending', group: g });
+      }
+      steps.push({ id: `${g}:count:cloud:lock`, label: `[${g}] Cloud lock`, state: 'pending', group: g });
+
+      steps.push({ id: `${g}:count:home:login`, label: `[${g}] Home login`, state: 'pending', group: g });
+      steps.push({ id: `${g}:count:home:sync`, label: `[${g}] Home sync`, state: 'pending', group: g });
+      for (const t of groupTargets) {
+        steps.push({ id: `${g}:count:home:${t}`, label: `[${t}] Count home items`, state: 'pending', group: g });
+      }
+      steps.push({ id: `${g}:count:home:lock`, label: `[${g}] Home lock`, state: 'pending', group: g });
+    }
   }
   return steps;
 }
@@ -233,10 +251,19 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
 const credentialResolvers = new Map<string, (pw: string, otp?: string, otpMethod?: number) => void>();
 const confirmationResolvers = new Map<string, (decision: 'proceed' | 'skip' | 'abort') => void>();
 
+function clearPrompt(job: Job): void {
+  if (!job.prompt) return;
+  job.prompt = undefined;
+  emit(job.id, 'prompt', null);
+  persistJob(job);
+}
+
 export function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number): boolean {
   const resolver = credentialResolvers.get(`${jobId}:${accountKey}`);
   if (!resolver) return false;
   cachePassword(accountKey, password);
+  const job = jobs.get(jobId);
+  if (job) clearPrompt(job);
   resolver(password, otp, otpMethod);
   return true;
 }
@@ -244,6 +271,8 @@ export function submitCredentials(jobId: string, accountKey: string, password: s
 export function submitConfirmation(jobId: string, target: string, decision: 'proceed' | 'skip' | 'abort'): boolean {
   const resolver = confirmationResolvers.get(`${jobId}:${target}`);
   if (!resolver) return false;
+  const job = jobs.get(jobId);
+  if (job) clearPrompt(job);
   resolver(decision);
   return true;
 }
@@ -253,6 +282,7 @@ export function cancelJob(jobId: string): boolean {
   if (!job) return false;
   if (!['running', 'awaiting-credentials', 'awaiting-confirmation', 'queued'].includes(job.state)) return false;
   updateJobState(job, 'aborted');
+  clearPrompt(job);
   // Wake any pending resolvers
   for (const [k, res] of credentialResolvers) {
     if (k.startsWith(jobId + ':')) { res('', undefined, undefined); credentialResolvers.delete(k); }
@@ -264,10 +294,11 @@ export function cancelJob(jobId: string): boolean {
   return true;
 }
 
-async function waitForCredentials(job: Job, accountKey: string, side: 'cloud' | 'home', needsOtp: boolean): Promise<{ password: string; otp?: string; otpMethod?: number }> {
+async function waitForCredentials(job: Job, accountKey: string, targets: string[], side: 'cloud' | 'home', needsOtp: boolean): Promise<{ password: string; otp?: string; otpMethod?: number }> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       credentialResolvers.delete(`${job.id}:${accountKey}`);
+      clearPrompt(job);
       reject(new Error(`Credential prompt timed out for ${accountKey}`));
     }, job.options.confirmTimeout ?? 30 * 60 * 1000);
 
@@ -278,7 +309,7 @@ async function waitForCredentials(job: Job, accountKey: string, side: 'cloud' | 
       else resolve({ password: pw, otp, otpMethod });
     });
 
-    const prompt: CredentialPrompt = { kind: 'credentials', accountKey, side, needsOtp };
+    const prompt: CredentialPrompt = { kind: 'credentials', accountKey, targets, side, needsOtp };
     job.prompt = prompt;
     emit(job.id, 'prompt', prompt);
   });
@@ -288,6 +319,7 @@ async function waitForConfirmation(job: Job, target: string, diff: DiffResult): 
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       confirmationResolvers.delete(`${job.id}:${target}`);
+      clearPrompt(job);
       reject(new Error(`Confirmation timed out for ${target}`));
     }, job.options.confirmTimeout ?? 30 * 60 * 1000);
 
@@ -318,6 +350,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
   const groups = buildAccountGroups(job.targets, config);
   const doBackup = job.operations.includes('backup') || job.operations.includes('both');
   const doImport = job.operations.includes('import') || job.operations.includes('both');
+  const doCount = job.operations.includes('count');
 
   const backupFiles = new Map<string, string>(); // targetKey → path
   const backupFailed = new Set<string>();
@@ -353,7 +386,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateJobState(job, 'awaiting-credentials');
             updateStep(job, cloudLoginStepId, { state: 'awaiting-input' });
             try {
-              const creds = await waitForCredentials(job, account, 'cloud', initResult.reason === 'needs-otp');
+              const creds = await waitForCredentials(job, account, groupTargets, 'cloud', initResult.reason === 'needs-otp');
               if (creds.otp) {
                 initResult = await bwInit({ profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: cloudDir, otp: creds.otp, otpMethod: creds.otpMethod, log });
               } else {
@@ -505,7 +538,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateJobState(job, 'awaiting-credentials');
             updateStep(job, homeLoginId, { state: 'awaiting-input' });
             try {
-              const creds = await waitForCredentials(job, account, 'home', homeInitResult.reason === 'needs-otp');
+              const creds = await waitForCredentials(job, account, groupTargets, 'home', homeInitResult.reason === 'needs-otp');
               homeInitResult = await bwInit({
                 profileKey: `home-${account}`,
                 email,
@@ -727,6 +760,157 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           updateStep(job, homeLogoutId, { state: 'running' });
           await logoutProfile(homeDir, log);
           updateStep(job, homeLogoutId, { state: 'succeeded' });
+        }
+      }
+
+      // ─── COUNT PHASE (live item counts, no export) ─────────────────────────
+      if (doCount && (job.state as string) !== 'aborted') {
+        job.results = job.results ?? {};
+
+        // Cloud side
+        const countCloudLoginId = `${account}:count:cloud:login`;
+        updateStep(job, countCloudLoginId, { state: 'running' });
+        updateJobState(job, 'running');
+
+        const countCloudDir = cloudProfileDir(config.bitwardenConfigDir, account);
+        let countCloudInit = await bwInit({
+          profileKey: account,
+          email,
+          wantServer: config.cloudServerUrl,
+          profileDir: countCloudDir,
+          log,
+        });
+
+        while (countCloudInit.ok === false) {
+          if (countCloudInit.reason === 'needs-password' || countCloudInit.reason === 'needs-otp') {
+            updateJobState(job, 'awaiting-credentials');
+            updateStep(job, countCloudLoginId, { state: 'awaiting-input' });
+            try {
+              const creds = await waitForCredentials(job, account, groupTargets, 'cloud', countCloudInit.reason === 'needs-otp');
+              countCloudInit = creds.otp
+                ? await bwInit({ profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: countCloudDir, otp: creds.otp, otpMethod: creds.otpMethod, log })
+                : await bwInit({ profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: countCloudDir, log });
+              updateJobState(job, 'running');
+              updateStep(job, countCloudLoginId, { state: 'running' });
+            } catch (err: unknown) {
+              updateStep(job, countCloudLoginId, { state: 'failed', detail: String(err) });
+              anyFailed = true;
+              break;
+            }
+          } else {
+            updateStep(job, countCloudLoginId, { state: 'failed', detail: countCloudInit.message });
+            anyFailed = true;
+            break;
+          }
+        }
+
+        if (!countCloudInit.ok) {
+          updateStep(job, `${account}:count:cloud:sync`, { state: 'skipped' });
+          for (const t of groupTargets) {
+            updateStep(job, `${account}:count:cloud:${t}`, { state: 'skipped', detail: 'Login failed' });
+          }
+          updateStep(job, `${account}:count:cloud:lock`, { state: 'skipped' });
+        } else {
+          const countCloudSession = countCloudInit.sessionKey;
+          updateStep(job, countCloudLoginId, { state: 'succeeded' });
+          updateStep(job, `${account}:count:cloud:sync`, { state: 'succeeded' });
+
+          for (const target of groupTargets) {
+            if ((job.state as string) === 'aborted') break;
+            const org = config.orgs.find((o) => o.key === target);
+            const isOrg = !!org;
+            const stepId = `${account}:count:cloud:${target}`;
+            updateStep(job, stepId, { state: 'running' });
+            try {
+              const items = await listItems(countCloudDir, countCloudSession, { organizationId: isOrg ? org!.saasId : undefined }, log);
+              const filtered = isOrg
+                ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.saasId)
+                : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
+              job.results[target] = { ...job.results[target], cloud: filtered.length };
+              updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items` });
+            } catch (err: unknown) {
+              updateStep(job, stepId, { state: 'failed', detail: String(err) });
+              anyFailed = true;
+            }
+          }
+
+          updateStep(job, `${account}:count:cloud:lock`, { state: 'running' });
+          await lockProfile(countCloudDir, log);
+          updateStep(job, `${account}:count:cloud:lock`, { state: 'succeeded' });
+        }
+
+        // Home (self-hosted) side
+        if ((job.state as string) !== 'aborted') {
+          const countHomeLoginId = `${account}:count:home:login`;
+          updateStep(job, countHomeLoginId, { state: 'running' });
+          updateJobState(job, 'running');
+
+          const countHomeDir = homeProfileDir(config.bitwardenConfigDir, account);
+          let countHomeInit = await bwInit({
+            profileKey: `home-${account}`,
+            email,
+            wantServer: config.homeServerUrl,
+            profileDir: countHomeDir,
+            log,
+          });
+
+          while (countHomeInit.ok === false) {
+            if (countHomeInit.reason === 'needs-password' || countHomeInit.reason === 'needs-otp') {
+              updateJobState(job, 'awaiting-credentials');
+              updateStep(job, countHomeLoginId, { state: 'awaiting-input' });
+              try {
+                const creds = await waitForCredentials(job, account, groupTargets, 'home', countHomeInit.reason === 'needs-otp');
+                countHomeInit = creds.otp
+                  ? await bwInit({ profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: countHomeDir, otp: creds.otp, otpMethod: creds.otpMethod, log })
+                  : await bwInit({ profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: countHomeDir, log });
+                updateJobState(job, 'running');
+                updateStep(job, countHomeLoginId, { state: 'running' });
+              } catch (err: unknown) {
+                updateStep(job, countHomeLoginId, { state: 'failed', detail: String(err) });
+                anyFailed = true;
+                break;
+              }
+            } else {
+              updateStep(job, countHomeLoginId, { state: 'failed', detail: countHomeInit.message });
+              anyFailed = true;
+              break;
+            }
+          }
+
+          if (!countHomeInit.ok) {
+            updateStep(job, `${account}:count:home:sync`, { state: 'skipped' });
+            for (const t of groupTargets) {
+              updateStep(job, `${account}:count:home:${t}`, { state: 'skipped', detail: 'Login failed' });
+            }
+            updateStep(job, `${account}:count:home:lock`, { state: 'skipped' });
+          } else {
+            const countHomeSession = countHomeInit.sessionKey;
+            updateStep(job, countHomeLoginId, { state: 'succeeded' });
+            updateStep(job, `${account}:count:home:sync`, { state: 'succeeded' });
+
+            for (const target of groupTargets) {
+              if ((job.state as string) === 'aborted') break;
+              const org = config.orgs.find((o) => o.key === target);
+              const isOrg = !!org;
+              const stepId = `${account}:count:home:${target}`;
+              updateStep(job, stepId, { state: 'running' });
+              try {
+                const items = await listItems(countHomeDir, countHomeSession, { organizationId: isOrg ? org!.homeId : undefined }, log);
+                const filtered = isOrg
+                  ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.homeId)
+                  : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
+                job.results[target] = { ...job.results[target], home: filtered.length };
+                updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items` });
+              } catch (err: unknown) {
+                updateStep(job, stepId, { state: 'failed', detail: String(err) });
+                anyFailed = true;
+              }
+            }
+
+            updateStep(job, `${account}:count:home:lock`, { state: 'running' });
+            await lockProfile(countHomeDir, log);
+            updateStep(job, `${account}:count:home:lock`, { state: 'succeeded' });
+          }
         }
       }
     }

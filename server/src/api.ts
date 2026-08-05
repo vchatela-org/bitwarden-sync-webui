@@ -15,6 +15,7 @@ import {
   requireCsrf,
   getCsrfToken,
   verifyUiPassword,
+  loadPersistedSessions,
 } from './auth.js';
 import {
   createJob,
@@ -347,6 +348,8 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
     addJobListener(cb);
     ws.on('close', () => removeJobListener(cb));
   });
+
+  loadPersistedSessions();
 
   if (configResult.ok) {
     setGlobalConfig(configResult.config);

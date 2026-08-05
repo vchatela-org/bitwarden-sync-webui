@@ -1,6 +1,10 @@
 import React, { useState } from 'react';
+import { KeyRound, Cloud, HardDrive, AlertCircle } from 'lucide-react';
 import { CredentialPrompt } from '../types.js';
 import { submitCredentials } from '../api.js';
+import { Modal } from './ui/Modal.js';
+import { Button } from './ui/Button.js';
+import { Input, Select, Field, Alert } from './ui/Input.js';
 
 interface Props {
   jobId: string;
@@ -21,115 +25,125 @@ export function CredentialModal({ jobId, prompt, onSubmitted }: Props) {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
+  const isCloud = prompt.side === 'cloud';
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
-      await submitCredentials(jobId, prompt.accountKey, password, prompt.needsOtp ? otp : undefined, prompt.needsOtp ? otpMethod : undefined);
+      await submitCredentials(
+        jobId,
+        prompt.accountKey,
+        password,
+        prompt.needsOtp ? otp : undefined,
+        prompt.needsOtp ? otpMethod : undefined,
+      );
       onSubmitted();
     } catch (err: unknown) {
-      setError(err instanceof Error ? err.message : 'Failed');
+      const message = err instanceof Error ? err.message : 'Failed to submit credentials';
+      if (/no pending credential prompt|not awaiting credentials/i.test(message)) {
+        // The job already moved past this prompt (e.g. stale state after a reload) —
+        // there's nothing left to submit, so just close the modal instead of dead-ending the user.
+        onSubmitted();
+        return;
+      }
+      setError(message);
     } finally {
       setLoading(false);
     }
   }
 
+  const formId = 'credential-form';
+  const canSubmit = !!password && (!prompt.needsOtp || !!otp);
+
   return (
-    <div style={styles.overlay}>
-      <div style={styles.modal}>
-        <h2 style={styles.title}>🔑 Credentials Required</h2>
-        <p style={styles.subtitle}>
-          Account: <strong style={{ color: '#60a5fa' }}>{prompt.accountKey}</strong>
-          {' '} ({prompt.side === 'cloud' ? '☁️ cloud' : '🏠 home server'})
-        </p>
-        <form onSubmit={handleSubmit}>
-          <label style={styles.label}>Master Password</label>
-          <input
+    <Modal
+      open
+      icon={<KeyRound />}
+      title="Credentials required"
+      description={
+        <span className="inline-flex flex-wrap items-center gap-1.5">
+          Unlocking
+          <strong className="font-medium text-fg">{prompt.accountKey}</strong>
+          on
+          <span className="inline-flex items-center gap-1 rounded-md border border-line bg-elevated px-1.5 py-px text-[11px] text-fg-muted">
+            {isCloud ? (
+              <Cloud className="size-3 text-info" />
+            ) : (
+              <HardDrive className="size-3 text-violet" />
+            )}
+            {isCloud ? 'cloud' : 'home server'}
+          </span>
+          {prompt.targets && prompt.targets.length > 0 && (
+            <span className="w-full text-[11px] text-fg-faint">
+              Covers: {prompt.targets.join(', ')}
+            </span>
+          )}
+        </span>
+      }
+      footer={
+        <Button
+          type="submit"
+          form={formId}
+          variant="primary"
+          loading={loading}
+          disabled={!canSubmit}
+        >
+          {loading ? 'Unlocking…' : 'Unlock vault'}
+        </Button>
+      }
+    >
+      <form id={formId} onSubmit={handleSubmit} className="space-y-3.5 pb-4">
+        <Field label="Master password" htmlFor="master-password">
+          <Input
+            id="master-password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            style={styles.input}
             placeholder="Vault master password"
             autoFocus
+            autoComplete="off"
           />
-          {prompt.needsOtp && (
-            <>
-              <label style={styles.label}>Two-step method</label>
-              <select
+        </Field>
+
+        {prompt.needsOtp && (
+          <>
+            <Field label="Two-step method" htmlFor="otp-method">
+              <Select
+                id="otp-method"
                 value={otpMethod}
                 onChange={(e) => setOtpMethod(parseInt(e.target.value))}
-                style={styles.input}
               >
                 {OTP_METHODS.map((m) => (
                   <option key={m.value} value={m.value}>{m.label}</option>
                 ))}
-              </select>
-              <label style={styles.label}>OTP Code</label>
-              <input
+              </Select>
+            </Field>
+
+            <Field label="Verification code" htmlFor="otp-code">
+              <Input
+                id="otp-code"
                 type="text"
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
-                style={styles.input}
-                placeholder="6-digit code"
+                placeholder="000000"
                 maxLength={10}
                 pattern="[0-9a-zA-Z]+"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                className="font-mono tracking-[0.3em]"
               />
-            </>
-          )}
-          {error && <div style={styles.error}>{error}</div>}
-          <div style={styles.buttons}>
-            <button type="submit" disabled={loading || !password || (prompt.needsOtp && !otp)} style={styles.btnPrimary}>
-              {loading ? 'Submitting…' : 'Submit'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+            </Field>
+          </>
+        )}
+
+        {error && <Alert icon={<AlertCircle />}>{error}</Alert>}
+
+        <p className="text-[11px] leading-relaxed text-fg-faint">
+          Sent directly to the Bitwarden CLI for this job only — never written to disk or logs.
+        </p>
+      </form>
+    </Modal>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  overlay: {
-    position: 'fixed',
-    inset: 0,
-    background: 'rgba(0,0,0,0.7)',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 1000,
-  },
-  modal: {
-    background: '#1a1d27',
-    border: '1px solid #2d3148',
-    borderRadius: 12,
-    padding: '32px 40px',
-    width: 400,
-    boxShadow: '0 16px 48px rgba(0,0,0,0.6)',
-  },
-  title: { color: '#e2e8f0', margin: 0, fontSize: 20 },
-  subtitle: { color: '#94a3b8', fontSize: 13, margin: '10px 0 20px' },
-  label: { display: 'block', color: '#94a3b8', fontSize: 13, marginBottom: 6, marginTop: 12 },
-  input: {
-    width: '100%',
-    padding: '9px 12px',
-    background: '#0f1117',
-    border: '1px solid #2d3148',
-    borderRadius: 6,
-    color: '#e2e8f0',
-    fontSize: 14,
-    boxSizing: 'border-box',
-  },
-  error: { color: '#f87171', fontSize: 13, marginTop: 8 },
-  buttons: { marginTop: 20, display: 'flex', gap: 8, justifyContent: 'flex-end' },
-  btnPrimary: {
-    padding: '9px 20px',
-    background: '#4f46e5',
-    border: 'none',
-    borderRadius: 6,
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-};

@@ -1,4 +1,6 @@
 import { randomBytes, createHmac, timingSafeEqual } from 'crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { join } from 'path';
 import { Request, Response, NextFunction } from 'express';
 
 const SESSION_COOKIE = 'bw_session';
@@ -7,6 +9,33 @@ const CSRF_COOKIE = 'bw_csrf';
 // Active sessions: token → expiry
 const sessions = new Map<string, number>();
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
+
+// Sessions are persisted to disk so a server/container restart doesn't force everyone to log in again.
+const DATA_DIR = process.env['DATA_DIR'] ?? '/data';
+const SESSIONS_FILE = join(DATA_DIR, 'sessions.json');
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
+function saveSessionsDebounced(): void {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(SESSIONS_FILE, JSON.stringify(Object.fromEntries(sessions)));
+    } catch { /* best-effort */ }
+  }, 2000);
+}
+
+/** Load persisted sessions from disk. Call once at server startup. */
+export function loadPersistedSessions(): void {
+  try {
+    const raw = JSON.parse(readFileSync(SESSIONS_FILE, 'utf-8')) as Record<string, number>;
+    const now = Date.now();
+    for (const [token, expiry] of Object.entries(raw)) {
+      if (expiry > now) sessions.set(token, expiry);
+    }
+  } catch { /* no persisted sessions yet */ }
+}
 
 function generateToken(len = 32): string {
   return randomBytes(len).toString('hex');
@@ -20,6 +49,7 @@ function isSecure(req: Request): boolean {
 export function createSession(res: Response, req: Request): string {
   const token = generateToken(32);
   sessions.set(token, Date.now() + SESSION_TTL_MS);
+  saveSessionsDebounced();
 
   const secure = isSecure(req);
   const csrfToken = generateToken(16);
@@ -46,6 +76,7 @@ export function destroySession(req: Request, res: Response): void {
   const token = req.cookies?.[SESSION_COOKIE];
   if (token) {
     sessions.delete(token);
+    saveSessionsDebounced();
   }
   res.clearCookie(SESSION_COOKIE);
   res.clearCookie(CSRF_COOKIE);
@@ -58,10 +89,12 @@ export function isAuthenticated(req: Request): boolean {
   if (!expiry) return false;
   if (Date.now() > expiry) {
     sessions.delete(token);
+    saveSessionsDebounced();
     return false;
   }
   // Refresh session on activity
   sessions.set(token, Date.now() + SESSION_TTL_MS);
+  saveSessionsDebounced();
   return true;
 }
 

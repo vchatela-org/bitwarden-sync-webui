@@ -1,0 +1,185 @@
+@import 'tailwindcss';
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   Design tokens
+   A layered near-black surface stack, one indigo accent, and a semantic status
+   palette. Every colour in the app comes from here — no raw hex in components.
+   ────────────────────────────────────────────────────────────────────────── */
+@theme {
+  /* Surfaces, from deepest to most elevated */
+  --color-bg: #08090d;
+  --color-surface: #0c0e13;
+  --color-surface-2: #11131b;
+  --color-elevated: #161822;
+  --color-hover: #1b1e29;
+
+  /* Hairlines */
+  --color-line: #1e2029;
+  --color-line-strong: #2b2e3b;
+
+  /* Foreground ramp */
+  --color-fg: #e8eaf1;
+  --color-fg-muted: #9aa1b1;
+  --color-fg-subtle: #6b7280;
+  --color-fg-faint: #474d5b;
+
+  /* Accent */
+  --color-accent: #6366f1;
+  --color-accent-hi: #7c7ff5;
+  --color-accent-lo: #4f46e5;
+  --color-accent-soft: #6366f11f;
+  --color-accent-line: #6366f14d;
+
+  /* Semantic status */
+  --color-ok: #34d399;
+  --color-ok-soft: #34d3991a;
+  --color-ok-line: #34d39940;
+
+  --color-warn: #fbbf24;
+  --color-warn-soft: #fbbf241a;
+  --color-warn-line: #fbbf2440;
+
+  --color-danger: #f87171;
+  --color-danger-hi: #ef4444;
+  --color-danger-soft: #f871711a;
+  --color-danger-line: #f8717140;
+
+  --color-info: #60a5fa;
+  --color-info-soft: #60a5fa1a;
+  --color-info-line: #60a5fa40;
+
+  --color-violet: #a78bfa;
+  --color-violet-soft: #a78bfa1a;
+  --color-violet-line: #a78bfa40;
+
+  /* Typography — system stacks only; this app runs on isolated networks
+     where a webfont CDN would simply fail to load. */
+  --font-sans:
+    ui-sans-serif, -apple-system, BlinkMacSystemFont, 'Segoe UI Variable Text',
+    'Segoe UI', Inter, Roboto, 'Helvetica Neue', Arial, sans-serif;
+  --font-mono:
+    ui-monospace, 'SFMono-Regular', 'JetBrains Mono', 'Cascadia Mono',
+    'Cascadia Code', Consolas, 'Liberation Mono', monospace;
+
+  /* Elevation */
+  --shadow-card: 0 1px 2px #0000004d;
+  --shadow-pop: 0 12px 32px -8px #000000a6, 0 2px 8px #00000059;
+  --shadow-modal: 0 24px 64px -12px #000000cc, 0 0 0 1px #ffffff0a;
+
+  /* Motion */
+  --ease-out-quint: cubic-bezier(0.22, 1, 0.36, 1);
+
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-pulse-ring: pulse-ring 2s var(--ease-out-quint) infinite;
+  --animate-fade-in: fade-in 0.18s var(--ease-out-quint);
+  --animate-rise: rise 0.22s var(--ease-out-quint);
+  --animate-pop: pop 0.16s var(--ease-out-quint);
+}
+
+@keyframes shimmer {
+  from { background-position: -200% 0; }
+  to { background-position: 200% 0; }
+}
+
+@keyframes pulse-ring {
+  0% { box-shadow: 0 0 0 0 currentColor; opacity: 0.7; }
+  70% { box-shadow: 0 0 0 5px transparent; opacity: 1; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 0.7; }
+}
+
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes rise {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes pop {
+  from { opacity: 0; transform: translate(-50%, -48%) scale(0.97); }
+  to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────── */
+
+@layer base {
+  * {
+    border-color: var(--color-line);
+  }
+
+  html {
+    color-scheme: dark;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    background-color: var(--color-bg);
+    color: var(--color-fg);
+    font-family: var(--font-sans);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11', 'ss01';
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* One focus treatment for the whole app */
+  :focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+  :focus:not(:focus-visible) {
+    outline: none;
+  }
+
+  ::selection {
+    background: var(--color-accent-lo);
+    color: #fff;
+  }
+
+  /* Numeric columns line up without a monospace font */
+  th, td {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer utilities {
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-line-strong) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 9px;
+    height: 9px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: var(--color-line-strong);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: var(--color-fg-faint);
+    background-clip: content-box;
+  }
+
+  /* Hairline that fades at both ends — used under the header and section rules */
+  .rule-fade {
+    background: linear-gradient(
+      90deg,
+      transparent,
+      var(--color-line-strong) 15%,
+      var(--color-line-strong) 85%,
+      transparent
+    );
+  }
+
+  .text-balance {
+    text-wrap: balance;
+  }
+}

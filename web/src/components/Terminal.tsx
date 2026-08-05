@@ -1,4 +1,9 @@
-import React, { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import { Search, Copy, Download, ArrowDownToLine, Check, Terminal as TerminalIcon } from 'lucide-react';
+import { Input } from './ui/Input.js';
+import { Button } from './ui/Button.js';
+import { Tooltip } from './ui/Feedback.js';
+import { cn } from '../lib/cn.js';
 
 interface LogLine {
   ts: string;
@@ -13,15 +18,22 @@ interface Props {
   height?: number;
 }
 
-const STREAM_COLORS: Record<string, string> = {
-  stdout: '#94a3b8',
-  stderr: '#f87171',
-  app: '#60a5fa',
+const STREAM_STYLE: Record<string, string> = {
+  stdout: 'text-fg-faint',
+  stderr: 'text-danger',
+  app: 'text-info',
 };
 
-export function Terminal({ logs, filterStep, height = 320 }: Props) {
+const LINE_STYLE: Record<string, string> = {
+  stdout: 'text-fg-muted',
+  stderr: 'text-danger/90',
+  app: 'text-fg',
+};
+
+export function Terminal({ logs, filterStep, height = 340 }: Props) {
   const [filter, setFilter] = useState('');
   const [paused, setPaused] = useState(false);
+  const [copied, setCopied] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -44,14 +56,27 @@ export function Terminal({ logs, filterStep, height = 320 }: Props) {
     setPaused(!atBottom);
   }
 
+  function resume() {
+    setPaused(false);
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }
+
+  function asText(): string {
+    return displayed.map((l) => `[${l.ts}] [${l.stream}] ${l.line}`).join('\n');
+  }
+
   function copyAll() {
-    const text = displayed.map((l) => `[${l.ts}] [${l.stream}] ${l.line}`).join('\n');
-    navigator.clipboard.writeText(text).catch(() => {});
+    navigator.clipboard.writeText(asText()).then(
+      () => {
+        setCopied(true);
+        setTimeout(() => setCopied(false), 1600);
+      },
+      () => { /* clipboard unavailable over plain HTTP — Download still works */ },
+    );
   }
 
   function downloadLog() {
-    const text = displayed.map((l) => `[${l.ts}] [${l.stream}] ${l.line}`).join('\n');
-    const blob = new Blob([text], { type: 'text/plain' });
+    const blob = new Blob([asText()], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -61,50 +86,88 @@ export function Terminal({ logs, filterStep, height = 320 }: Props) {
   }
 
   return (
-    <div style={styles.container}>
-      <div style={styles.toolbar}>
-        <input
-          type="text"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          style={styles.filterInput}
-          placeholder="Filter log…"
-        />
-        <span style={styles.lineCount}>{displayed.length} lines</span>
-        {paused && <span style={styles.paused}>⏸ Paused</span>}
-        <button style={styles.toolBtn} onClick={copyAll}>Copy all</button>
-        <button style={styles.toolBtn} onClick={downloadLog}>Download</button>
+    <div className="relative overflow-hidden rounded-xl border border-line bg-[#06070a] shadow-card">
+      {/* Toolbar */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-line bg-surface/70 px-2.5 py-2 backdrop-blur">
+        <div className="w-full sm:w-56">
+          <Input
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Filter log…"
+            icon={<Search />}
+            className="h-7 rounded-md text-xs"
+          />
+        </div>
+
+        <span className="text-[11px] tabular-nums text-fg-faint">
+          {displayed.length.toLocaleString()}
+          {displayed.length !== logs.length && (
+            <span className="text-fg-faint/70"> / {logs.length.toLocaleString()}</span>
+          )}{' '}
+          lines
+        </span>
+
+        <div className="ml-auto flex items-center gap-1">
+          <Tooltip content={copied ? 'Copied' : 'Copy visible lines'}>
+            <Button size="sm" variant="ghost" onClick={copyAll} aria-label="Copy log">
+              {copied ? <Check className="size-3.5 text-ok" /> : <Copy className="size-3.5" />}
+            </Button>
+          </Tooltip>
+          <Tooltip content="Download as .log">
+            <Button size="sm" variant="ghost" onClick={downloadLog} aria-label="Download log">
+              <Download className="size-3.5" />
+            </Button>
+          </Tooltip>
+        </div>
       </div>
+
+      {/* Log area */}
       <div
         ref={containerRef}
-        style={{ ...styles.logArea, height }}
         onScroll={handleScroll}
+        style={{ height }}
+        className="scrollbar-thin overflow-y-auto px-3 py-2.5 font-mono text-[12px] leading-[1.55]"
       >
-        {displayed.map((line, i) => (
-          <div key={i} style={styles.logLine}>
-            <span style={styles.ts}>{line.ts.slice(11, 19)}</span>
-            <span style={{ ...styles.stream, color: STREAM_COLORS[line.stream] ?? '#94a3b8' }}>
-              [{line.stream}]
+        {displayed.length === 0 ? (
+          <div className="flex h-full flex-col items-center justify-center gap-2 text-fg-faint">
+            <TerminalIcon className="size-5" />
+            <span className="text-xs">
+              {logs.length === 0 ? 'Waiting for output…' : 'No lines match the current filter'}
             </span>
-            <span style={styles.lineText}>{line.line}</span>
           </div>
-        ))}
+        ) : (
+          displayed.map((line, i) => (
+            <div key={i} className="flex gap-2.5 rounded px-1 -mx-1 hover:bg-white/[0.03]">
+              <span className="w-14 shrink-0 select-none text-fg-faint/60">
+                {line.ts.slice(11, 19)}
+              </span>
+              <span className={cn('w-12 shrink-0 select-none', STREAM_STYLE[line.stream])}>
+                {line.stream}
+              </span>
+              <span className={cn('min-w-0 flex-1 whitespace-pre-wrap break-all', LINE_STYLE[line.stream])}>
+                {line.line}
+              </span>
+            </div>
+          ))
+        )}
         <div ref={bottomRef} />
       </div>
+
+      {/* Resume-follow pill, shown only when the user has scrolled up */}
+      {paused && (
+        <button
+          onClick={resume}
+          className={cn(
+            'absolute bottom-3 left-1/2 -translate-x-1/2 animate-rise',
+            'inline-flex items-center gap-1.5 rounded-full border border-line-strong bg-elevated',
+            'px-3 py-1.5 text-[11px] font-medium text-fg-muted shadow-pop',
+            'transition-colors hover:border-accent-line hover:text-fg',
+          )}
+        >
+          <ArrowDownToLine className="size-3" />
+          Follow output
+        </button>
+      )}
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { background: '#0a0c13', border: '1px solid #1e2235', borderRadius: 8, overflow: 'hidden' },
-  toolbar: { display: 'flex', alignItems: 'center', gap: 8, padding: '6px 12px', background: '#12151e', borderBottom: '1px solid #1e2235' },
-  filterInput: { flex: 1, padding: '4px 8px', background: '#0a0c13', border: '1px solid #2d3148', borderRadius: 4, color: '#e2e8f0', fontSize: 12 },
-  lineCount: { color: '#475569', fontSize: 11 },
-  paused: { color: '#f59e0b', fontSize: 11 },
-  toolBtn: { padding: '3px 8px', background: 'transparent', border: '1px solid #2d3148', borderRadius: 4, color: '#64748b', cursor: 'pointer', fontSize: 11 },
-  logArea: { overflowY: 'auto', fontFamily: 'monospace', fontSize: 12, padding: '8px 12px' },
-  logLine: { display: 'flex', gap: 6, marginBottom: 2, lineHeight: 1.4 },
-  ts: { color: '#3d4166', minWidth: 64, flexShrink: 0 },
-  stream: { minWidth: 56, flexShrink: 0 },
-  lineText: { color: '#94a3b8', wordBreak: 'break-all', whiteSpace: 'pre-wrap' },
-};

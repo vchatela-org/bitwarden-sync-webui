@@ -1,34 +1,47 @@
 import React from 'react';
+import {
+  Circle,
+  Loader2,
+  CheckCircle2,
+  XCircle,
+  MinusCircle,
+  AlertTriangle,
+  PauseCircle,
+} from 'lucide-react';
 import { Step, StepState } from '../types.js';
+import { cn } from '../lib/cn.js';
+import { STEP_TONE, formatDuration } from '../lib/status.js';
+import { TONE_TEXT } from './ui/Badge.js';
+import { Tooltip } from './ui/Feedback.js';
 
 interface Props {
   steps: Step[];
-  onSelectStep?: (stepId: string) => void;
+  onSelectStep?: (stepId: string | undefined) => void;
   selectedStep?: string;
 }
 
-const STATE_COLORS: Record<StepState, string> = {
-  pending: '#475569',
-  running: '#3b82f6',
-  succeeded: '#22c55e',
-  failed: '#ef4444',
-  skipped: '#64748b',
-  warning: '#f59e0b',
-  'awaiting-input': '#8b5cf6',
+const STEP_ICON: Record<StepState, React.ComponentType<{ className?: string }>> = {
+  pending: Circle,
+  running: Loader2,
+  succeeded: CheckCircle2,
+  failed: XCircle,
+  skipped: MinusCircle,
+  warning: AlertTriangle,
+  'awaiting-input': PauseCircle,
 };
 
-const STATE_ICONS: Record<StepState, string> = {
-  pending: '○',
-  running: '⟳',
-  succeeded: '✓',
-  failed: '✗',
-  skipped: '—',
-  warning: '⚠',
-  'awaiting-input': '⏸',
+/** Left border colour of a step node, by state. */
+const STEP_EDGE: Record<StepState, string> = {
+  pending: 'border-l-fg-faint',
+  running: 'border-l-info',
+  succeeded: 'border-l-ok',
+  failed: 'border-l-danger',
+  skipped: 'border-l-fg-faint',
+  warning: 'border-l-warn',
+  'awaiting-input': 'border-l-violet',
 };
 
 export function StepGraph({ steps, onSelectStep, selectedStep }: Props) {
-  // Group steps by account group
   const groups = new Map<string, Step[]>();
   for (const step of steps) {
     if (!groups.has(step.group)) groups.set(step.group, []);
@@ -36,63 +49,87 @@ export function StepGraph({ steps, onSelectStep, selectedStep }: Props) {
   }
 
   return (
-    <div style={styles.container}>
-      {[...groups.entries()].map(([group, groupSteps]) => (
-        <div key={group} style={styles.group}>
-          <div style={styles.groupLabel}>{group}</div>
-          <div style={styles.stepList}>
-            {groupSteps.map((step) => {
-              const color = STATE_COLORS[step.state];
-              const icon = STATE_ICONS[step.state];
-              const isSelected = selectedStep === step.id;
-              const isRunning = step.state === 'running';
-              return (
-                <div
-                  key={step.id}
-                  style={{
-                    ...styles.stepNode,
-                    borderColor: color,
-                    background: isSelected ? '#1e2235' : '#12151e',
-                    cursor: onSelectStep ? 'pointer' : 'default',
-                  }}
-                  onClick={() => onSelectStep?.(step.id)}
-                >
-                  <span style={{ color, fontSize: 14, fontWeight: 700, animation: isRunning ? 'spin 1s linear infinite' : undefined }}>
-                    {icon}
-                  </span>
-                  <div style={styles.stepLabel}>{step.label}</div>
-                  {step.detail && (
-                    <div style={styles.stepDetail}>{step.detail.slice(0, 80)}</div>
-                  )}
-                  {step.startedAt && step.endedAt && (
-                    <div style={styles.stepDuration}>
-                      {Math.round((new Date(step.endedAt).getTime() - new Date(step.startedAt).getTime()) / 1000)}s
+    <div className="space-y-4">
+      {[...groups.entries()].map(([group, groupSteps]) => {
+        const done = groupSteps.filter((s) => s.state === 'succeeded').length;
+        const failed = groupSteps.some((s) => s.state === 'failed');
+
+        return (
+          <div key={group}>
+            <div className="mb-2 flex items-center gap-2">
+              <h4 className="text-[11px] font-semibold uppercase tracking-[0.06em] text-fg-subtle">
+                {group}
+              </h4>
+              <div className="h-px flex-1 rule-fade opacity-60" />
+              <span
+                className={cn(
+                  'text-[10px] tabular-nums',
+                  failed ? 'text-danger' : done === groupSteps.length ? 'text-ok' : 'text-fg-faint',
+                )}
+              >
+                {done}/{groupSteps.length}
+              </span>
+            </div>
+
+            <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
+              {groupSteps.map((step) => {
+                const tone = STEP_TONE[step.state];
+                const Icon = STEP_ICON[step.state];
+                const isSelected = selectedStep === step.id;
+                const duration = formatDuration(step.startedAt, step.endedAt);
+
+                return (
+                  <button
+                    key={step.id}
+                    onClick={() => onSelectStep?.(isSelected ? undefined : step.id)}
+                    disabled={!onSelectStep}
+                    className={cn(
+                      'flex items-start gap-2 rounded-lg border border-l-2 px-2.5 py-2 text-left',
+                      'transition-[background-color,border-color] duration-150',
+                      STEP_EDGE[step.state],
+                      isSelected
+                        ? 'border-accent-line bg-accent-soft'
+                        : 'border-line bg-surface enabled:hover:bg-surface-2 enabled:hover:border-line-strong',
+                      !onSelectStep && 'cursor-default',
+                    )}
+                  >
+                    <Icon
+                      className={cn(
+                        'mt-px size-3.5 shrink-0',
+                        TONE_TEXT[tone],
+                        step.state === 'running' && 'animate-spin',
+                        step.state === 'pending' && 'opacity-50',
+                      )}
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div
+                        className={cn(
+                          'truncate text-xs leading-snug',
+                          step.state === 'pending' ? 'text-fg-subtle' : 'text-fg',
+                        )}
+                      >
+                        {step.label}
+                      </div>
+                      {step.detail && (
+                        <Tooltip content={step.detail}>
+                          <div className="mt-0.5 truncate text-[11px] text-fg-subtle">
+                            {step.detail}
+                          </div>
+                        </Tooltip>
+                      )}
                     </div>
-                  )}
-                </div>
-              );
-            })}
+                    {duration && (
+                      <span className="mt-px shrink-0 text-[10px] tabular-nums text-fg-faint">
+                        {duration}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
-
-const styles: Record<string, React.CSSProperties> = {
-  container: { padding: '16px 0', overflowX: 'auto' },
-  group: { marginBottom: 16 },
-  groupLabel: { color: '#64748b', fontSize: 12, fontWeight: 600, marginBottom: 8, paddingLeft: 4 },
-  stepList: { display: 'flex', flexWrap: 'wrap', gap: 6 },
-  stepNode: {
-    border: '1px solid',
-    borderRadius: 6,
-    padding: '6px 10px',
-    minWidth: 140,
-    maxWidth: 200,
-    fontSize: 11,
-  },
-  stepLabel: { color: '#cbd5e1', marginTop: 2, fontSize: 11, lineHeight: 1.3 },
-  stepDetail: { color: '#94a3b8', fontSize: 10, marginTop: 2, wordBreak: 'break-all' },
-  stepDuration: { color: '#475569', fontSize: 10, marginTop: 2 },
-};

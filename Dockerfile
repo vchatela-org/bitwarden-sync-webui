@@ -19,7 +19,7 @@ RUN npm run build --workspace=server
 # ─── Runtime stage ────────────────────────────────────────────────────────────
 FROM node:22-alpine AS runtime
 
-ARG BW_CLI_VERSION=2025.12.0
+ARG BW_CLI_VERSION=2026.7.0
 ARG UID=1000
 
 # Install the Bitwarden CLI at a pinned version
