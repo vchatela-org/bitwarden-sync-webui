@@ -66,6 +66,10 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
+  // Generous baseline limit for all API routes (the UI polls /api/jobs and
+  // /api/status periodically); auth gets its own stricter limiter below.
+  app.use('/api', rateLimit({ windowMs: 60 * 1000, max: 300 }));
+
   // ── Auth routes ────────────────────────────────────────────────────────────
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 
