@@ -3,6 +3,9 @@ import { getPassword, forgetPassword, cachePassword, passwordKey } from './secre
 
 export type ProfileSide = 'cloud' | 'home';
 
+/** Server the bw CLI uses when a profile has no explicit `config server`. */
+export const DEFAULT_BW_SERVER = 'https://vault.bitwarden.com';
+
 export interface BwStatus {
   status: 'unauthenticated' | 'locked' | 'unlocked' | string;
   serverUrl: string;
@@ -70,15 +73,19 @@ export async function bwInit(opts: {
       return { ok: false, reason: 'needs-password', message: `Password required for ${pwKey}` };
     }
 
-    // 1. Read status + server
+    // 1. Read status + server.
+    // A profile that has never had `bw config server` run against it reports
+    // serverUrl: null and silently uses the CLI's built-in default, so treat an
+    // empty serverUrl as that default rather than as "matches whatever we want".
     const statusResult = await getBwStatus(profileDir, log);
     let currentStatus = statusResult.status;
-    const currentServer = statusResult.serverUrl?.replace(/\/$/, '') ?? '';
+    const configuredServer = statusResult.serverUrl?.replace(/\/$/, '') ?? '';
+    const currentServer = configuredServer || DEFAULT_BW_SERVER;
     const wantServerNorm = wantServer.replace(/\/$/, '');
 
     // 2. Server mismatch → logout first, then reconfigure
-    if (currentServer && currentServer !== wantServerNorm) {
-      log?.('app' as never, `[${profileKey}] Server mismatch: '${currentServer}' → switching to '${wantServerNorm}'`);
+    if (currentServer !== wantServerNorm) {
+      log?.('app' as never, `[${profileKey}] Server is '${configuredServer || `unset (default ${DEFAULT_BW_SERVER})`}' → switching to '${wantServerNorm}'`);
       if (currentStatus !== 'unauthenticated') {
         await runBw(['logout'], { profileDir, timeout: 10000 }, log);
       }
