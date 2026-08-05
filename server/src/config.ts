@@ -12,8 +12,8 @@ const orgSchema = z.object({
   key: z.string().min(1),
   name: z.string().min(1),
   owner: z.string().min(1),
-  saasId: z.string().uuid(),
-  homeId: z.string().uuid(),
+  saasId: z.guid(),
+  homeId: z.guid(),
 });
 
 const retentionSchema = z.object({
@@ -33,8 +33,8 @@ const configSchema = z.object({
   bitwardenConfigDir: z.string().min(1),
   users: z.array(userSchema).min(1),
   orgs: z.array(orgSchema).default([]),
-  retention: retentionSchema.default({}),
-  importGuard: importGuardSchema.default({}),
+  retention: retentionSchema.prefault({}),
+  importGuard: importGuardSchema.prefault({}),
   homeLogoutAfterImport: z.boolean().default(true),
 });
 
