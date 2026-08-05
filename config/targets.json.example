@@ -1,0 +1,43 @@
+{
+  "_comment": "Rename this file to targets.json and fill in your real values.",
+
+  "cloudServerUrl": "https://vault.bitwarden.com",
+  "homeServerUrl": "https://bitwarden.example.internal",
+
+  "backupFolder": "/backups",
+  "bitwardenConfigDir": "/data",
+
+  "users": [
+    {
+      "key": "alice",
+      "email": "alice@example.com",
+      "displayName": "Alice"
+    },
+    {
+      "key": "bob",
+      "email": "bob@example.com"
+    }
+  ],
+
+  "orgs": [
+    {
+      "key": "acme",
+      "name": "Acme Corp",
+      "owner": "alice",
+      "saasId": "00000000-0000-0000-0000-000000000001",
+      "homeId": "00000000-0000-0000-0000-000000000002"
+    }
+  ],
+
+  "retention": {
+    "keepDaily": 7,
+    "keepMonthly": 12
+  },
+
+  "importGuard": {
+    "minSourceRatio": 0.5,
+    "blockOnEmptySource": true
+  },
+
+  "homeLogoutAfterImport": true
+}

@@ -1,0 +1,53 @@
+# Local development / testing stack.
+#
+# QUICK START
+# -----------
+# 1. Copy the example config and fill in your values:
+#      cp config/targets.json.example config/targets.json
+#
+# 2. Copy the env file and set at minimum UI_PASSWORD and SESSION_SECRET:
+#      cp .env.example .env
+#
+# 3. Build and start:
+#      docker compose up --build
+#
+# 4. Open http://localhost:3000 and log in with your UI_PASSWORD.
+#
+# VOLUMES
+# -------
+# ./config   → /config   : read-only targets.json and Bitwarden profiles
+# ./backups  → /backups  : backup archives written here on the host
+# ./data     → /data     : Bitwarden CLI session data (profiles, keys)
+#
+# NOTE: The bw CLI requires a real Bitwarden account to run jobs.
+# The UI will start and is fully navigable even without one — the
+# config error is shown in the dashboard until a valid config is provided.
+
+services:
+  webui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      CONFIG_PATH: /config/targets.json
+      DATA_DIR: /data
+      BW_FIFO_DIR: /run/bw-fifo
+      PORT: "3000"
+    volumes:
+      - ./config:/config:ro
+      # Map host backup folder (BACKUP_FOLDER in .bitwarden-env) into the container.
+      # On WSL2/Linux the host path is /mnt/z/backups/bitwarden; adjust for your OS.
+      - /mnt/z/backups/bitwarden:/backups
+      # Map host Bitwarden profile dir (~/.config/bitwarden) into the container.
+      - ~/.config/bitwarden:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
