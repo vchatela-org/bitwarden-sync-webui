@@ -25,7 +25,7 @@ spec:
 
       containers:
         - name: webui
-          image: ghcr.io/vchatela/bitwarden-webui:latest
+          image: ghcr.io/vchatela-org/bitwarden-sync-webui:latest
           imagePullPolicy: Always
           ports:
             - containerPort: 3000

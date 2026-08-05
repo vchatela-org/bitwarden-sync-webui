@@ -3,8 +3,8 @@
 A self-hosted **web UI for Bitwarden cloud → self-hosted vault synchronisation**, implemented as a
 TypeScript/Node.js backend + React SPA, deployed as a Docker image into a k3s cluster.
 
-The bash script `bitwarden_export.sh` at the repository root **remains the CLI fallback path and is
-not modified**. This UI is a parallel implementation.
+This UI began as the web companion to a private bash-based `bitwarden_export.sh` CLI tool; that script
+is not part of this repo, but the table below maps its concepts onto this codebase for reference.
 
 ---
 
@@ -29,7 +29,6 @@ not modified**. This UI is a parallel implementation.
 
 ```bash
 # 1. Install dependencies
-cd webui
 npm install
 
 # 2. Set required environment variables
@@ -52,7 +51,6 @@ npm run dev
 ## Building for production
 
 ```bash
-cd webui
 npm run build
 # Server binary: server/dist/index.js
 # SPA assets:    server/dist/public/
@@ -63,7 +61,6 @@ npm run build
 ## Running tests
 
 ```bash
-cd webui
 npm test
 ```
 
@@ -74,14 +71,17 @@ All tests are in `server/test/`. They run with Vitest and need no network or rea
 ## Docker build
 
 ```bash
-docker build -t bitwarden-webui:latest webui/
+docker build -t bitwarden-webui:latest .
 ```
 
 Override the Bitwarden CLI version:
 
 ```bash
-docker build --build-arg BW_CLI_VERSION=2026.7.0 -t bitwarden-webui:latest webui/
+docker build --build-arg BW_CLI_VERSION=2026.7.0 -t bitwarden-webui:latest .
 ```
+
+The published image is also available at `ghcr.io/vchatela-org/bitwarden-sync-webui` (tags: `latest`
+and semver versions) — see [Packages](https://github.com/vchatela-org/bitwarden-sync-webui/pkgs/container/bitwarden-sync-webui).
 
 ---
 
@@ -98,7 +98,7 @@ kubectl -n bitwarden create secret generic bitwarden-webui-secrets \
   --from-literal=SESSION_SECRET="$(node -e "console.log(require('crypto').randomBytes(48).toString('hex'))")"
 
 # 4. Apply manifests
-kubectl apply -k webui/deploy/
+kubectl apply -k deploy/
 
 # 5. Watch rollout
 kubectl -n bitwarden rollout status deployment/bitwarden-webui
@@ -138,8 +138,7 @@ The config file is mounted from a ConfigMap at `CONFIG_PATH` (default `/config/t
 ### Migrating from `.bitwarden-env`
 
 ```bash
-cd webui
-bash scripts/env-to-json.sh ../.bitwarden-env > /tmp/targets.json
+bash scripts/env-to-json.sh /path/to/.bitwarden-env > /tmp/targets.json
 # Review /tmp/targets.json, then add it to a ConfigMap
 ```
 
