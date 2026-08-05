@@ -1,5 +1,5 @@
 # ─── Build stage: compile web SPA ────────────────────────────────────────────
-FROM node:22-alpine AS web-builder
+FROM node:25-alpine AS web-builder
 WORKDIR /app
 COPY web/package.json ./web/
 COPY package.json ./
@@ -8,7 +8,7 @@ COPY web/ ./web/
 RUN npm run build --workspace=web
 
 # ─── Build stage: compile TypeScript server ───────────────────────────────────
-FROM node:22-alpine AS server-builder
+FROM node:25-alpine AS server-builder
 WORKDIR /app
 COPY server/package.json ./server/
 COPY package.json ./
@@ -17,7 +17,7 @@ COPY server/ ./server/
 RUN npm run build --workspace=server
 
 # ─── Runtime stage ────────────────────────────────────────────────────────────
-FROM node:22-alpine AS runtime
+FROM node:25-alpine AS runtime
 
 ARG BW_CLI_VERSION=2026.7.0
 ARG UID=1000
