@@ -216,13 +216,14 @@ export function Dashboard({ config, onJobCreated }: Props) {
     const newestSets = allTargets
       .map((t) => perTarget.get(t.key)?.newest)
       .filter((s): s is BackupSet => !!s);
-    const items = newestSets.reduce((acc, s) => acc + (s.meta?.itemCount ?? 0), 0);
+    const items = newestSets.reduce((acc, s) => acc + (s.itemCount ?? 0), 0);
+    const unknownCounts = newestSets.filter((s) => s.itemCount === undefined).length;
     const totalBytes = backupSets.reduce((acc, s) => acc + s.sizeBytes, 0);
     const oldest = newestSets.length
       ? newestSets.reduce((a, b) => (parseTimestamp(a.timestamp) < parseTimestamp(b.timestamp) ? a : b))
       : null;
     const uncovered = allTargets.length - newestSets.length;
-    return { items, totalBytes, oldest, uncovered };
+    return { items, totalBytes, oldest, uncovered, unknownCounts };
   }, [allTargets, perTarget, backupSets]);
 
   const allSelected = selectedTargets.size === allTargets.length && allTargets.length > 0;
@@ -255,7 +256,11 @@ export function Dashboard({ config, onJobCreated }: Props) {
         <StatCard
           label="Items protected"
           value={summary.items.toLocaleString()}
-          hint="across newest backup of each target"
+          hint={
+            summary.unknownCounts > 0
+              ? `across newest backup of each target · ${summary.unknownCounts} uncountable`
+              : 'across newest backup of each target'
+          }
           icon={<Archive />}
         />
         <StatCard

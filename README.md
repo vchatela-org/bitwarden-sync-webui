@@ -171,13 +171,35 @@ same CA bundle.
 
 ---
 
+## Backup item counts
+
+Each backup a job produces gets a `.meta.json` sidecar recording the item, folder and collection
+counts plus the SHA-256 of the password-protected export. The dashboard's **Items protected** tile
+and the per-set **Items** column read from it.
+
+Backups made by `bitwarden_export.sh` have no sidecar — nor do any backups predating sidecars — so
+the counts fall back to the export itself. The account-key export (`*_encrypted.json`) keeps a
+plain-text JSON envelope, so its `items`/`folders`/`collections` arrays can be counted without the
+vault password even though every field inside them is ciphertext. `countSource` on each set says
+which source was used.
+
+The fallback reads file contents rather than just the directory listing, so results are cached in
+`$DATA_DIR/backup-counts.json`, keyed on each file's size and mtime. The first `/api/backups` call
+after a restart with an empty cache reads every export once (a few seconds over ~100 MB on a network
+mount); later calls are served from the cache. Deleting the cache file is safe — it rebuilds.
+
+The password-protected export (`*_encrypted_pass.json`) is a single opaque blob and yields no counts,
+so a set that has lost its account-key export shows `—`.
+
+---
+
 ## Environment variables
 
 | Variable | Default | Description |
 |---|---|---|
 | `PORT` | `3000` | HTTP listen port |
 | `CONFIG_PATH` | `/config/targets.json` | Path to targets.json |
-| `DATA_DIR` | `/data` | Directory for CLI profiles + job history |
+| `DATA_DIR` | `/data` | Directory for CLI profiles, job history + backup count cache |
 | `UI_PASSWORD_HASH` | — | Argon2id hash of the UI password (preferred) |
 | `UI_PASSWORD` | — | Plaintext UI password (dev only) |
 | `SESSION_SECRET` | random | Cookie signing secret — set in production |

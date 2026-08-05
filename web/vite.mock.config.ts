@@ -39,6 +39,10 @@ const set = (targetKey: string, kind: 'user' | 'org', daysAgo: number, items: nu
   ],
   sizeBytes: bytes,
   meta: { target: targetKey, kind, timestamp: ts(daysAgo), itemCount: items, folderCount: 12, sourceServer: 'https://vault.bitwarden.eu', cliVersion: '2026.7.0', sizeBytes: bytes },
+  itemCount: items,
+  folderCount: 12,
+  collectionCount: kind === 'org' ? 4 : null,
+  countSource: 'meta',
 });
 
 const backups = {

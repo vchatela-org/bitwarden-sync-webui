@@ -1,6 +1,7 @@
 import { readdirSync, statSync, readFileSync, unlinkSync } from 'fs';
 import { resolve, join } from 'path';
 import { createHash } from 'crypto';
+import { deriveCounts, flushCountCache, pruneCountCache } from './backupCounts.js';
 
 export type BackupKind = 'user' | 'org';
 export type BackupFileType = 'encrypted' | 'encrypted_pass' | 'meta' | 'other';
@@ -22,6 +23,12 @@ export interface BackupSet {
   files: BackupFile[];
   sizeBytes: number;
   meta?: BackupMeta;
+  /** Items in the set — from the sidecar when it exists, else read off the export itself. */
+  itemCount?: number;
+  folderCount?: number;
+  collectionCount?: number | null;
+  /** Where the counts above came from; absent when neither source yielded any. */
+  countSource?: 'meta' | 'export';
 }
 
 export interface BackupMeta {
@@ -104,7 +111,20 @@ export interface BackupInventory {
   unmanaged: string[];
 }
 
-export function inventoryBackups(backupFolder: string, configuredTargetKeys: string[]): BackupInventory {
+export interface InventoryOptions {
+  /**
+   * Read item counts out of the export files for sets that have no `.meta.json`
+   * sidecar. Off by default because it touches file contents rather than just
+   * the directory listing; results are cached on size+mtime.
+   */
+  deriveCounts?: boolean;
+}
+
+export function inventoryBackups(
+  backupFolder: string,
+  configuredTargetKeys: string[],
+  options: InventoryOptions = {},
+): BackupInventory {
   const keySet = new Set(configuredTargetKeys);
   const setMap = new Map<string, BackupSet>();
   const unmanaged: string[] = [];
@@ -159,7 +179,41 @@ export function inventoryBackups(backupFolder: string, configuredTargetKeys: str
   }
 
   const managed = [...setMap.values()].sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  for (const bkSet of managed) {
+    applyCounts(bkSet, options.deriveCounts === true);
+  }
+  if (options.deriveCounts) {
+    pruneCountCache(new Set(managed.flatMap((s) => s.files.map((f) => f.path))));
+    flushCountCache();
+  }
   return { managed, unmanaged };
+}
+
+/**
+ * Fill in a set's counts. The sidecar wins when present; otherwise fall back to
+ * counting the arrays in the account-key encrypted export, which is the only
+ * source available for backups made by bitwarden_export.sh.
+ */
+function applyCounts(bkSet: BackupSet, derive: boolean): void {
+  if (typeof bkSet.meta?.itemCount === 'number') {
+    bkSet.itemCount = bkSet.meta.itemCount;
+    bkSet.folderCount = bkSet.meta.folderCount;
+    bkSet.collectionCount = bkSet.meta.collectionCount;
+    bkSet.countSource = 'meta';
+    return;
+  }
+  if (!derive) return;
+
+  const enc = bkSet.files.find((f) => f.fileType === 'encrypted');
+  if (!enc) return;
+  const counts = deriveCounts(enc.path);
+  if (!counts) return;
+
+  bkSet.itemCount = counts.itemCount;
+  bkSet.folderCount = counts.folderCount;
+  // Personal vaults have no collections; reporting 0 there would read as data loss.
+  bkSet.collectionCount = bkSet.kind === 'org' ? counts.collectionCount : null;
+  bkSet.countSource = 'export';
 }
 
 export interface RetentionConfig {
@@ -232,13 +286,17 @@ export function checkIntegrity(set: BackupSet): IntegrityResult[] {
   const results: IntegrityResult[] = [];
   for (const file of set.files) {
     if (file.fileType === 'meta') continue;
+    // The sidecar's hash and size describe one file -- the password-protected
+    // export it names. Holding the other files in the set to those numbers would
+    // fail every single time; they only get the JSON validity check.
+    const covered = set.meta?.exportFile === file.filename;
     try {
       const content = readFileSync(file.path, 'utf-8');
       JSON.parse(content); // validates JSON
       const sha = createHash('sha256').update(content).digest('hex');
-      if (set.meta?.sha256 && set.meta.sha256 !== sha) {
+      if (covered && set.meta?.sha256 && set.meta.sha256 !== sha) {
         results.push({ path: file.path, ok: false, reason: `SHA256 mismatch: expected ${set.meta.sha256}, got ${sha}` });
-      } else if (set.meta?.sizeBytes && set.meta.sizeBytes !== file.sizeBytes) {
+      } else if (covered && set.meta?.sizeBytes && set.meta.sizeBytes !== file.sizeBytes) {
         results.push({ path: file.path, ok: false, reason: `Size mismatch: expected ${set.meta.sizeBytes}, got ${file.sizeBytes}` });
       } else {
         results.push({ path: file.path, ok: true });

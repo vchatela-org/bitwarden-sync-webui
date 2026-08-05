@@ -252,7 +252,7 @@ export function BackupsPage({ config }: Props) {
                               </span>
                             </td>
                             <td className="py-2 text-right tabular-nums text-fg-muted">
-                              {s.meta?.itemCount?.toLocaleString() ?? '—'}
+                              {s.itemCount?.toLocaleString() ?? '—'}
                             </td>
                             <td className="py-2 text-right tabular-nums text-fg-muted">
                               {formatBytes(s.sizeBytes)}

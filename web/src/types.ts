@@ -120,6 +120,11 @@ export interface BackupSet {
   files: BackupFile[];
   sizeBytes: number;
   meta?: BackupMeta;
+  /** Items in the set — from the sidecar when it exists, else read off the export itself. */
+  itemCount?: number;
+  folderCount?: number;
+  collectionCount?: number | null;
+  countSource?: 'meta' | 'export';
 }
 
 export interface BackupInventory {

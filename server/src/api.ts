@@ -255,7 +255,7 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
   app.get('/api/backups', requireAuth, (req: Request, res: Response): void => {
     if (!configResult.ok) { res.status(503).json({ error: configResult.error }); return; }
     const { config } = configResult;
-    const inv = inventoryBackups(config.backupFolder, allTargetKeys(config));
+    const inv = inventoryBackups(config.backupFolder, allTargetKeys(config), { deriveCounts: true });
     res.json(inv);
   });
 
