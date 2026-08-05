@@ -95,10 +95,12 @@ export async function bwInit(opts: {
       if (result.exitCode === 0 && isValidSessionKey(result.stdout.trim())) {
         sessionKey = result.stdout.trim();
       } else {
-        // Check if 2FA is needed
-        if (result.stdout.includes('Two-step') || result.stderr.includes('Two-step') ||
-            result.stdout.includes('two-step') || result.stderr.includes('two-step') ||
-            result.stdout.includes('2FA') || result.stderr.includes('2FA')) {
+        // Check if 2FA is needed. The bw CLI does not always mention "Two-step"/"2FA" —
+        // with --nointeraction and no --code it prints "Code is required." (single provider,
+        // e.g. TOTP-only accounts, auto-selected) or "Login failed. No provider selected."
+        // (multiple providers, no --method given).
+        const out = `${result.stdout}\n${result.stderr}`;
+        if (/two-step|2fa|code is required|no provider selected|no providers available/i.test(out)) {
           needsOtp = true;
         } else {
           loginFailed = true;
