@@ -29,7 +29,7 @@
     "@types/csurf": "^1.11.5",
     "@types/express": "^5.0.0",
     "@types/node": "^22.15.3",
-    "@types/uuid": "^10.0.0",
+    "@types/uuid": "^11.0.0",
     "@types/ws": "^8.5.14",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3",
