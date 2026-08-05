@@ -72,6 +72,18 @@ export interface JobOptions {
   confirmTimeout?: number; // ms, default 30 min
 }
 
+const CONFIRM_TIMEOUT_DEFAULT_MS = 30 * 60 * 1000;
+const CONFIRM_TIMEOUT_MIN_MS = 1000;
+const CONFIRM_TIMEOUT_MAX_MS = 24 * 60 * 60 * 1000;
+
+// job.options comes straight from the job-creation API body, so clamp it before
+// handing it to setTimeout: unclamped it's an unbounded-resource-hold vector, and
+// Node's timer delay silently overflows (fires ~immediately) past 2^31-1 ms.
+function confirmTimeoutMs(options: JobOptions): number {
+  const requested = options.confirmTimeout ?? CONFIRM_TIMEOUT_DEFAULT_MS;
+  return Math.min(Math.max(requested, CONFIRM_TIMEOUT_MIN_MS), CONFIRM_TIMEOUT_MAX_MS);
+}
+
 // In-memory state
 const jobs = new Map<string, Job>();
 const jobOrder: string[] = [];
@@ -322,7 +334,7 @@ async function waitForCredentials(job: Job, accountKey: string, targets: string[
       credentialResolvers.delete(`${job.id}:${accountKey}`);
       clearPrompt(job);
       reject(new Error(`Credential prompt timed out for ${accountKey}`));
-    }, job.options.confirmTimeout ?? 30 * 60 * 1000);
+    }, confirmTimeoutMs(job.options));
 
     credentialResolvers.set(`${job.id}:${accountKey}`, (pw: string, otp?: string, otpMethod?: number) => {
       clearTimeout(timeout);
@@ -391,7 +403,7 @@ async function waitForConfirmation(job: Job, target: string, diff: DiffResult): 
       confirmationResolvers.delete(`${job.id}:${target}`);
       clearPrompt(job);
       reject(new Error(`Confirmation timed out for ${target}`));
-    }, job.options.confirmTimeout ?? 30 * 60 * 1000);
+    }, confirmTimeoutMs(job.options));
 
     confirmationResolvers.set(`${job.id}:${target}`, (decision: string) => {
       clearTimeout(timeout);

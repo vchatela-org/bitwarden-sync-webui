@@ -66,6 +66,11 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
   app.use(express.json({ limit: '1mb' }));
   app.use(cookieParser());
 
+  // Generous baseline limit for all API routes (the UI polls /api/jobs and
+  // /api/status periodically); auth gets its own stricter limiter below.
+  const generalLimiter = rateLimit({ windowMs: 60 * 1000, max: 300 });
+  app.use('/api', generalLimiter);
+
   // ── Auth routes ────────────────────────────────────────────────────────────
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 
@@ -307,7 +312,8 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
 
   if (existsSync(publicDir)) {
     app.use(express.static(publicDir, { index: false }));
-    app.get('*', (req: Request, res: Response): void => {
+    // Express 5 / path-to-regexp v8 dropped the bare '*' wildcard — needs a named splat.
+    app.get('/*splat', generalLimiter, (req: Request, res: Response): void => {
       if (req.path.startsWith('/api')) {
         res.status(404).json({ error: 'Not found' });
         return;
