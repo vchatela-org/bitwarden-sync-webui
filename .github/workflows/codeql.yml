@@ -31,3 +31,7 @@ jobs:
         uses: github/codeql-action/analyze@v4
         with:
           category: "/language:javascript-typescript"
+          # Dependabot PR runs get a read-only GITHUB_TOKEN with no actions:read,
+          # regardless of the permissions block above — disable the optional
+          # database-upload feature so it doesn't hard-fail on those runs.
+          upload-database: false
