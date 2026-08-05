@@ -1,13 +1,12 @@
 import { describe, it, expect } from 'vitest';
 import { loadConfig } from '../src/config.js';
-import { writeFileSync, mkdirSync, rmSync } from 'fs';
+import { writeFileSync, mkdtempSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
-const TMP = join(tmpdir(), 'bw-config-test');
+const TMP = mkdtempSync(join(tmpdir(), 'bw-config-test-'));
 
 function writeConfig(obj: unknown): string {
-  mkdirSync(TMP, { recursive: true });
   const p = join(TMP, `config-${Date.now()}.json`);
   writeFileSync(p, JSON.stringify(obj));
   return p;

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync, statSync } from 'fs';
+import { readFileSync, writeFileSync, mkdirSync, openSync, fstatSync, closeSync } from 'fs';
 import { join } from 'path';
 
 /**
@@ -72,33 +72,43 @@ function countArray(obj: Record<string, unknown>, key: string): number {
  * Returns null when the file is unreadable or is not a countable export.
  */
 export function deriveCounts(path: string): DerivedCounts | null {
-  const stat = statSync(path, { throwIfNoEntry: false });
-  if (!stat) return null;
-
-  const mtimeMs = Math.floor(stat.mtimeMs);
-  const map = loadCache();
-  const hit = map.get(path);
-  if (hit && hit.size === stat.size && hit.mtimeMs === mtimeMs) {
-    return { itemCount: hit.itemCount, folderCount: hit.folderCount, collectionCount: hit.collectionCount };
-  }
-
-  let parsed: Record<string, unknown>;
+  // Stat and read through the same fd (not by path) so the file can't be swapped
+  // out between the size/mtime check and the read.
+  let fd: number;
   try {
-    parsed = JSON.parse(readFileSync(path, 'utf-8')) as Record<string, unknown>;
+    fd = openSync(path, 'r');
   } catch {
     return null;
   }
-  // A password-protected export has no arrays to count, just a `data` blob.
-  if (!Array.isArray(parsed['items'])) return null;
+  try {
+    const stat = fstatSync(fd);
+    const mtimeMs = Math.floor(stat.mtimeMs);
+    const map = loadCache();
+    const hit = map.get(path);
+    if (hit && hit.size === stat.size && hit.mtimeMs === mtimeMs) {
+      return { itemCount: hit.itemCount, folderCount: hit.folderCount, collectionCount: hit.collectionCount };
+    }
 
-  const counts: DerivedCounts = {
-    itemCount: countArray(parsed, 'items'),
-    folderCount: countArray(parsed, 'folders'),
-    collectionCount: countArray(parsed, 'collections'),
-  };
-  map.set(path, { ...counts, size: stat.size, mtimeMs });
-  cacheDirty = true;
-  return counts;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(readFileSync(fd, 'utf-8')) as Record<string, unknown>;
+    } catch {
+      return null;
+    }
+    // A password-protected export has no arrays to count, just a `data` blob.
+    if (!Array.isArray(parsed['items'])) return null;
+
+    const counts: DerivedCounts = {
+      itemCount: countArray(parsed, 'items'),
+      folderCount: countArray(parsed, 'folders'),
+      collectionCount: countArray(parsed, 'collections'),
+    };
+    map.set(path, { ...counts, size: stat.size, mtimeMs });
+    cacheDirty = true;
+    return counts;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /** Drop cache entries for files that no longer exist (e.g. after a prune). */

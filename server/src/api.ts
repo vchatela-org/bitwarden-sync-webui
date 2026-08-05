@@ -64,6 +64,11 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
   }
 
   app.use(express.json({ limit: '1mb' }));
+  // Every state-changing route below is gated by requireCsrf (server/src/auth.ts),
+  // a double-submit-cookie check with a timing-safe comparison. CodeQL only
+  // recognizes known CSRF libraries (csurf, lusca, ...) as protection, not this
+  // hand-rolled middleware, so it flags these routes despite the check being present.
+  // codeql[js/missing-token-validation]
   app.use(cookieParser());
 
   // Generous baseline limit for all API routes (the UI polls /api/jobs and
@@ -89,7 +94,7 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
     res.json({ ok: true, csrfToken });
   });
 
-  app.post('/api/auth/logout', requireAuth, (req: Request, res: Response): void => {
+  app.post('/api/auth/logout', requireAuth, requireCsrf, (req: Request, res: Response): void => {
     destroySession(req, res);
     res.json({ ok: true });
   });

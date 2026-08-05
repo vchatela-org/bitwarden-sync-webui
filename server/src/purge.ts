@@ -100,6 +100,11 @@ export async function purgeVault(ctx: PurgeContext, log?: LogCallback): Promise<
   let purgeUrl = `${apiBase}/ciphers/purge`;
   if (homeOrgId) purgeUrl += `?organizationId=${encodeURIComponent(homeOrgId)}`;
 
+  // token comes from the bw CLI's own local session state (data.json), previously
+  // issued by this same homeServerUrl during login — not attacker-controlled file
+  // data, just this app re-presenting its own access token to the server that
+  // issued it, exactly as the bw CLI itself does for authenticated API calls.
+  // codeql[js/file-access-to-http]
   const resp = await fetch(purgeUrl, {
     method: 'POST',
     headers: {

@@ -1,4 +1,4 @@
-import { readdirSync, statSync, readFileSync, unlinkSync } from 'fs';
+import { readdirSync, readFileSync, unlinkSync, openSync, fstatSync, closeSync } from 'fs';
 import { resolve, join } from 'path';
 import { createHash } from 'crypto';
 import { deriveCounts, flushCountCache, pruneCountCache } from './backupCounts.js';
@@ -138,43 +138,55 @@ export function inventoryBackups(
 
   for (const filename of files) {
     const fullPath = join(backupFolder, filename);
-    const stat = statSync(fullPath, { throwIfNoEntry: false });
-    if (!stat || !stat.isFile()) continue;
-
-    const parsed = parseBackupFilename(filename);
-    if (!parsed || !keySet.has(parsed.targetKey)) {
-      unmanaged.push(fullPath);
+    // Stat and (for sidecars) read through the same fd, not by path, so the file
+    // can't be swapped out between the check and the read.
+    let fd: number;
+    try {
+      fd = openSync(fullPath, 'r');
+    } catch {
       continue;
     }
+    try {
+      const stat = fstatSync(fd);
+      if (!stat.isFile()) continue;
 
-    const setKey = `${parsed.kind}:${parsed.targetKey}:${parsed.timestamp}`;
-    if (!setMap.has(setKey)) {
-      setMap.set(setKey, {
+      const parsed = parseBackupFilename(filename);
+      if (!parsed || !keySet.has(parsed.targetKey)) {
+        unmanaged.push(fullPath);
+        continue;
+      }
+
+      const setKey = `${parsed.kind}:${parsed.targetKey}:${parsed.timestamp}`;
+      if (!setMap.has(setKey)) {
+        setMap.set(setKey, {
+          targetKey: parsed.targetKey,
+          kind: parsed.kind,
+          timestamp: parsed.timestamp,
+          files: [],
+          sizeBytes: 0,
+        });
+      }
+      const bkSet = setMap.get(setKey)!;
+      const backupFile: BackupFile = {
+        path: fullPath,
+        filename,
         targetKey: parsed.targetKey,
         kind: parsed.kind,
         timestamp: parsed.timestamp,
-        files: [],
-        sizeBytes: 0,
-      });
-    }
-    const bkSet = setMap.get(setKey)!;
-    const backupFile: BackupFile = {
-      path: fullPath,
-      filename,
-      targetKey: parsed.targetKey,
-      kind: parsed.kind,
-      timestamp: parsed.timestamp,
-      fileType: parsed.fileType,
-      sizeBytes: stat.size,
-    };
-    bkSet.files.push(backupFile);
-    bkSet.sizeBytes += stat.size;
+        fileType: parsed.fileType,
+        sizeBytes: stat.size,
+      };
+      bkSet.files.push(backupFile);
+      bkSet.sizeBytes += stat.size;
 
-    if (parsed.fileType === 'meta') {
-      try {
-        const meta = JSON.parse(readFileSync(fullPath, 'utf-8')) as BackupMeta;
-        bkSet.meta = meta;
-      } catch { /* ignore corrupt sidecar */ }
+      if (parsed.fileType === 'meta') {
+        try {
+          const meta = JSON.parse(readFileSync(fd, 'utf-8')) as BackupMeta;
+          bkSet.meta = meta;
+        } catch { /* ignore corrupt sidecar */ }
+      }
+    } finally {
+      closeSync(fd);
     }
   }
 

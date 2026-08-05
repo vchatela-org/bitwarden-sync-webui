@@ -81,7 +81,9 @@ const CONFIRM_TIMEOUT_MAX_MS = 24 * 60 * 60 * 1000;
 // Node's timer delay silently overflows (fires ~immediately) past 2^31-1 ms.
 function confirmTimeoutMs(options: JobOptions): number {
   const requested = options.confirmTimeout ?? CONFIRM_TIMEOUT_DEFAULT_MS;
-  return Math.min(Math.max(requested, CONFIRM_TIMEOUT_MIN_MS), CONFIRM_TIMEOUT_MAX_MS);
+  if (requested < CONFIRM_TIMEOUT_MIN_MS) return CONFIRM_TIMEOUT_MIN_MS;
+  if (requested > CONFIRM_TIMEOUT_MAX_MS) return CONFIRM_TIMEOUT_MAX_MS;
+  return requested;
 }
 
 // In-memory state
@@ -294,7 +296,7 @@ function clearPrompt(job: Job): void {
 
 export function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number): boolean {
   const resolver = credentialResolvers.get(`${jobId}:${accountKey}`);
-  if (!resolver) return false;
+  if (typeof resolver !== 'function') return false;
   cachePassword(accountKey, password);
   const job = jobs.get(jobId);
   if (job) clearPrompt(job);
@@ -304,7 +306,7 @@ export function submitCredentials(jobId: string, accountKey: string, password: s
 
 export function submitConfirmation(jobId: string, target: string, decision: 'proceed' | 'skip' | 'abort'): boolean {
   const resolver = confirmationResolvers.get(`${jobId}:${target}`);
-  if (!resolver) return false;
+  if (typeof resolver !== 'function') return false;
   const job = jobs.get(jobId);
   if (job) clearPrompt(job);
   resolver(decision);

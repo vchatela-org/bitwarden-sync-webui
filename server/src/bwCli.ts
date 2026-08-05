@@ -63,12 +63,17 @@ async function createFifo(password: string): Promise<{ path: string; cleanup: ()
   const fifoPath = join(FIFO_DIR, `pw-${randomBytes(8).toString('hex')}`);
 
   // On Linux use mkfifo for secure password passing; fall back to a regular
-  // file on Windows (tests, dev). mkfifo is not in Node's fs module — use execSync.
+  // file on Windows (tests, dev). mkfifo is not in Node's fs module — use execFileSync
+  // (argv array, not a shell string) so nothing in fifoPath can be interpreted by a shell.
   try {
-    const { execSync } = await import('child_process');
-    execSync(`mkfifo -m 600 "${fifoPath}"`);
+    const { execFileSync } = await import('child_process');
+    execFileSync('mkfifo', ['-m', '600', fifoPath]);
   } catch {
-    // mkfifo not available (Windows/tests), fall back to a regular file
+    // mkfifo not available (Windows/tests), fall back to a regular file.
+    // fifoPath is server-generated (FIFO_DIR + random hex, never request input),
+    // the file is 0600 and unlinked by cleanup() right after the bw CLI reads it —
+    // this is the intended password-handoff path, not an arbitrary file write.
+    // codeql[js/http-to-file-access]
     writeFileSync(fifoPath, password + '\n', { mode: 0o600 });
     return {
       path: fifoPath,
@@ -81,6 +86,9 @@ async function createFifo(password: string): Promise<{ path: string; cleanup: ()
   const writePromise = new Promise<void>((res, rej) => {
     const ws = createWriteStream(fifoPath);
     ws.on('open', () => {
+      // Same rationale as the fallback write above: fifoPath is server-generated,
+      // the FIFO is 0600 and consumed once by the bw CLI, then unlinked.
+      // codeql[js/http-to-file-access]
       ws.write(password + '\n', (err) => {
         ws.close();
         if (err) rej(err); else res();
