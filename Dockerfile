@@ -34,7 +34,8 @@ WORKDIR /app
 
 # Copy compiled server + pre-built SPA (in dist/public)
 COPY --from=server-builder /app/server/dist ./dist
-COPY --from=server-builder /app/server/node_modules ./node_modules
+# npm workspaces hoist all dependencies to the root node_modules, not server/node_modules
+COPY --from=server-builder /app/node_modules ./node_modules
 COPY --from=web-builder /app/server/dist/public ./dist/public
 
 # Create runtime directories that will be mount-points in the pod
