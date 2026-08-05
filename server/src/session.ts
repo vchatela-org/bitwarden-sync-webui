@@ -23,8 +23,18 @@ export type InitResult =
 export async function getBwStatus(profileDir: string, log?: LogCallback): Promise<BwStatus> {
   const result = await runBw(['status', '--response'], { profileDir, timeout: 10000 }, log);
   try {
-    const parsed = JSON.parse(result.stdout.trim()) as { success: boolean; data: BwStatus };
-    if (parsed.success && parsed.data) return parsed.data;
+    const parsed = JSON.parse(result.stdout.trim()) as {
+      success: boolean;
+      data?: (Partial<BwStatus> & { object?: string; template?: BwStatus }) | null;
+    };
+    if (parsed.success && parsed.data) {
+      // `bw status --response` wraps the actual status one level deeper as
+      // { object: "template", template: { status, serverUrl, ... } }.
+      const status = parsed.data.object === 'template' && parsed.data.template
+        ? parsed.data.template
+        : (parsed.data as BwStatus);
+      if (status && typeof status.status === 'string') return status;
+    }
   } catch { /* ignore */ }
   // Fallback: try to parse as direct status object
   try {

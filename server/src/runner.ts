@@ -2,7 +2,7 @@ import { randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { Config, buildAccountGroups, cloudProfileDir, homeProfileDir } from './config.js';
-import { bwInit, getBwStatus, lockProfile, logoutProfile, listItems, listOrgCollections } from './session.js';
+import { bwInit, getBwStatus, lockProfile, logoutProfile, listItems, listOrgCollections, InitResult } from './session.js';
 import { cachePassword, getPassword, clearAllPasswords, passwordKey } from './secrets.js';
 import { purgeVault } from './purge.js';
 import { dedupeOrgCollections } from './collections.js';
@@ -315,6 +315,54 @@ async function waitForCredentials(job: Job, accountKey: string, targets: string[
   });
 }
 
+const MAX_CREDENTIAL_ATTEMPTS = 3;
+
+/**
+ * Runs bwInit, prompting for credentials (and re-prompting on wrong password/OTP) until it
+ * succeeds or MAX_CREDENTIAL_ATTEMPTS is exhausted. Each bwInit() call is independent and always
+ * starts its own internal attempt count at 1, so the attempt limit has to be tracked here across
+ * calls rather than inside bwInit itself.
+ */
+async function loginWithRetry(opts: {
+  job: Job;
+  account: string;
+  groupTargets: string[];
+  side: 'cloud' | 'home';
+  profileKey: string;
+  email: string;
+  wantServer: string;
+  profileDir: string;
+  stepId: string;
+  log: LogCallback;
+}): Promise<InitResult> {
+  const { job, account, groupTargets, side, profileKey, email, wantServer, profileDir, stepId, log } = opts;
+  let result = await bwInit({ profileKey, email, wantServer, profileDir, log });
+
+  // Each iteration here is one credential prompt shown to the user, so this caps the
+  // number of prompts (not "wrong password" retries) at MAX_CREDENTIAL_ATTEMPTS.
+  for (
+    let attempt = 1;
+    attempt <= MAX_CREDENTIAL_ATTEMPTS && result.ok === false && (result.reason === 'needs-password' || result.reason === 'needs-otp');
+    attempt++
+  ) {
+    updateJobState(job, 'awaiting-credentials');
+    updateStep(job, stepId, { state: 'awaiting-input' });
+    const creds = await waitForCredentials(job, account, groupTargets, side, result.reason === 'needs-otp');
+    result = await bwInit({ profileKey, email, wantServer, profileDir, otp: creds.otp, otpMethod: creds.otpMethod, log });
+    updateJobState(job, 'running');
+    updateStep(job, stepId, { state: 'running' });
+  }
+
+  if (!result.ok && (result.reason === 'needs-password' || result.reason === 'needs-otp')) {
+    result = { ok: false, reason: 'max-attempts', message: `Failed after ${MAX_CREDENTIAL_ATTEMPTS} attempts` };
+  }
+
+  updateStep(job, stepId, result.ok
+    ? { state: 'succeeded' }
+    : { state: 'failed', detail: result.message });
+  return result;
+}
+
 async function waitForConfirmation(job: Job, target: string, diff: DiffResult): Promise<'proceed' | 'skip' | 'abort'> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
@@ -373,44 +421,26 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
         updateJobState(job, 'running');
 
         const cloudDir = cloudProfileDir(config.bitwardenConfigDir, account);
-        let initResult = await bwInit({
-          profileKey: account,
-          email,
-          wantServer: config.cloudServerUrl,
-          profileDir: cloudDir,
-          log,
-        });
-
-        while (initResult.ok === false) {
-          if (initResult.reason === 'needs-password' || initResult.reason === 'needs-otp') {
-            updateJobState(job, 'awaiting-credentials');
-            updateStep(job, cloudLoginStepId, { state: 'awaiting-input' });
-            try {
-              const creds = await waitForCredentials(job, account, groupTargets, 'cloud', initResult.reason === 'needs-otp');
-              if (creds.otp) {
-                initResult = await bwInit({ profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: cloudDir, otp: creds.otp, otpMethod: creds.otpMethod, log });
-              } else {
-                initResult = await bwInit({ profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: cloudDir, log });
-              }
-              updateJobState(job, 'running');
-              updateStep(job, cloudLoginStepId, { state: 'running' });
-            } catch (err: unknown) {
-              updateStep(job, cloudLoginStepId, { state: 'failed', detail: String(err) });
-              for (const t of groupTargets) { backupFailed.add(t); }
-              anyFailed = true;
-              break;
-            }
-          } else {
-            updateStep(job, cloudLoginStepId, { state: 'failed', detail: initResult.message });
-            for (const t of groupTargets) { backupFailed.add(t); }
-            anyFailed = true;
-            break;
-          }
+        let initResult: InitResult;
+        try {
+          initResult = await loginWithRetry({
+            job, account, groupTargets, side: 'cloud',
+            profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: cloudDir,
+            stepId: cloudLoginStepId, log,
+          });
+        } catch (err: unknown) {
+          updateStep(job, cloudLoginStepId, { state: 'failed', detail: String(err) });
+          for (const t of groupTargets) { backupFailed.add(t); }
+          anyFailed = true;
+          continue;
         }
 
-        if (!initResult.ok) continue;
+        if (!initResult.ok) {
+          for (const t of groupTargets) { backupFailed.add(t); }
+          anyFailed = true;
+          continue;
+        }
         cloudSession = initResult.sessionKey;
-        updateStep(job, cloudLoginStepId, { state: 'succeeded' });
 
         // Cloud sync step (already done in bwInit, just mark complete)
         const cloudSyncId = `${account}:cloud:sync`;
@@ -525,46 +555,24 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
         updateStep(job, homeLoginId, { state: 'running' });
 
         const homeDir = homeProfileDir(config.bitwardenConfigDir, account);
-        let homeInitResult = await bwInit({
-          profileKey: `home-${account}`,
-          email,
-          wantServer: config.homeServerUrl,
-          profileDir: homeDir,
-          log,
-        });
-
-        while (homeInitResult.ok === false) {
-          if (homeInitResult.reason === 'needs-password' || homeInitResult.reason === 'needs-otp') {
-            updateJobState(job, 'awaiting-credentials');
-            updateStep(job, homeLoginId, { state: 'awaiting-input' });
-            try {
-              const creds = await waitForCredentials(job, account, groupTargets, 'home', homeInitResult.reason === 'needs-otp');
-              homeInitResult = await bwInit({
-                profileKey: `home-${account}`,
-                email,
-                wantServer: config.homeServerUrl,
-                profileDir: homeDir,
-                otp: creds.otp,
-                otpMethod: creds.otpMethod,
-                log,
-              });
-              updateJobState(job, 'running');
-              updateStep(job, homeLoginId, { state: 'running' });
-            } catch (err: unknown) {
-              updateStep(job, homeLoginId, { state: 'failed', detail: String(err) });
-              anyFailed = true;
-              break;
-            }
-          } else {
-            updateStep(job, homeLoginId, { state: 'failed', detail: homeInitResult.message });
-            anyFailed = true;
-            break;
-          }
+        let homeInitResult: InitResult;
+        try {
+          homeInitResult = await loginWithRetry({
+            job, account, groupTargets, side: 'home',
+            profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: homeDir,
+            stepId: homeLoginId, log,
+          });
+        } catch (err: unknown) {
+          updateStep(job, homeLoginId, { state: 'failed', detail: String(err) });
+          anyFailed = true;
+          continue;
         }
 
-        if (!homeInitResult.ok) continue;
+        if (!homeInitResult.ok) {
+          anyFailed = true;
+          continue;
+        }
         const homeSession = homeInitResult.sessionKey;
-        updateStep(job, homeLoginId, { state: 'succeeded' });
         updateStep(job, `${account}:home:sync`, { state: 'succeeded' });
 
         // Import each target
@@ -773,38 +781,21 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
         updateJobState(job, 'running');
 
         const countCloudDir = cloudProfileDir(config.bitwardenConfigDir, account);
-        let countCloudInit = await bwInit({
-          profileKey: account,
-          email,
-          wantServer: config.cloudServerUrl,
-          profileDir: countCloudDir,
-          log,
-        });
-
-        while (countCloudInit.ok === false) {
-          if (countCloudInit.reason === 'needs-password' || countCloudInit.reason === 'needs-otp') {
-            updateJobState(job, 'awaiting-credentials');
-            updateStep(job, countCloudLoginId, { state: 'awaiting-input' });
-            try {
-              const creds = await waitForCredentials(job, account, groupTargets, 'cloud', countCloudInit.reason === 'needs-otp');
-              countCloudInit = creds.otp
-                ? await bwInit({ profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: countCloudDir, otp: creds.otp, otpMethod: creds.otpMethod, log })
-                : await bwInit({ profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: countCloudDir, log });
-              updateJobState(job, 'running');
-              updateStep(job, countCloudLoginId, { state: 'running' });
-            } catch (err: unknown) {
-              updateStep(job, countCloudLoginId, { state: 'failed', detail: String(err) });
-              anyFailed = true;
-              break;
-            }
-          } else {
-            updateStep(job, countCloudLoginId, { state: 'failed', detail: countCloudInit.message });
-            anyFailed = true;
-            break;
-          }
+        let countCloudInit: InitResult;
+        try {
+          countCloudInit = await loginWithRetry({
+            job, account, groupTargets, side: 'cloud',
+            profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: countCloudDir,
+            stepId: countCloudLoginId, log,
+          });
+        } catch (err: unknown) {
+          updateStep(job, countCloudLoginId, { state: 'failed', detail: String(err) });
+          anyFailed = true;
+          countCloudInit = { ok: false, reason: 'failed', message: String(err) };
         }
 
         if (!countCloudInit.ok) {
+          anyFailed = true;
           updateStep(job, `${account}:count:cloud:sync`, { state: 'skipped' });
           for (const t of groupTargets) {
             updateStep(job, `${account}:count:cloud:${t}`, { state: 'skipped', detail: 'Login failed' });
@@ -812,7 +803,6 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           updateStep(job, `${account}:count:cloud:lock`, { state: 'skipped' });
         } else {
           const countCloudSession = countCloudInit.sessionKey;
-          updateStep(job, countCloudLoginId, { state: 'succeeded' });
           updateStep(job, `${account}:count:cloud:sync`, { state: 'succeeded' });
 
           for (const target of groupTargets) {
@@ -846,38 +836,21 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           updateJobState(job, 'running');
 
           const countHomeDir = homeProfileDir(config.bitwardenConfigDir, account);
-          let countHomeInit = await bwInit({
-            profileKey: `home-${account}`,
-            email,
-            wantServer: config.homeServerUrl,
-            profileDir: countHomeDir,
-            log,
-          });
-
-          while (countHomeInit.ok === false) {
-            if (countHomeInit.reason === 'needs-password' || countHomeInit.reason === 'needs-otp') {
-              updateJobState(job, 'awaiting-credentials');
-              updateStep(job, countHomeLoginId, { state: 'awaiting-input' });
-              try {
-                const creds = await waitForCredentials(job, account, groupTargets, 'home', countHomeInit.reason === 'needs-otp');
-                countHomeInit = creds.otp
-                  ? await bwInit({ profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: countHomeDir, otp: creds.otp, otpMethod: creds.otpMethod, log })
-                  : await bwInit({ profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: countHomeDir, log });
-                updateJobState(job, 'running');
-                updateStep(job, countHomeLoginId, { state: 'running' });
-              } catch (err: unknown) {
-                updateStep(job, countHomeLoginId, { state: 'failed', detail: String(err) });
-                anyFailed = true;
-                break;
-              }
-            } else {
-              updateStep(job, countHomeLoginId, { state: 'failed', detail: countHomeInit.message });
-              anyFailed = true;
-              break;
-            }
+          let countHomeInit: InitResult;
+          try {
+            countHomeInit = await loginWithRetry({
+              job, account, groupTargets, side: 'home',
+              profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: countHomeDir,
+              stepId: countHomeLoginId, log,
+            });
+          } catch (err: unknown) {
+            updateStep(job, countHomeLoginId, { state: 'failed', detail: String(err) });
+            anyFailed = true;
+            countHomeInit = { ok: false, reason: 'failed', message: String(err) };
           }
 
           if (!countHomeInit.ok) {
+            anyFailed = true;
             updateStep(job, `${account}:count:home:sync`, { state: 'skipped' });
             for (const t of groupTargets) {
               updateStep(job, `${account}:count:home:${t}`, { state: 'skipped', detail: 'Login failed' });
@@ -885,7 +858,6 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateStep(job, `${account}:count:home:lock`, { state: 'skipped' });
           } else {
             const countHomeSession = countHomeInit.sessionKey;
-            updateStep(job, countHomeLoginId, { state: 'succeeded' });
             updateStep(job, `${account}:count:home:sync`, { state: 'succeeded' });
 
             for (const target of groupTargets) {
