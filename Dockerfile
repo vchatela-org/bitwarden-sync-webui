@@ -1,31 +1,46 @@
 # ─── Build stage: compile web SPA ────────────────────────────────────────────
-FROM node:22-alpine AS web-builder
+FROM node:25-alpine AS web-builder
 WORKDIR /app
 COPY web/package.json ./web/
-COPY package.json ./
-RUN npm install --workspace=web
+COPY package.json package-lock.json ./
+RUN npm ci --workspace=web
 COPY web/ ./web/
 RUN npm run build --workspace=web
 
 # ─── Build stage: compile TypeScript server ───────────────────────────────────
-FROM node:22-alpine AS server-builder
+FROM node:25-alpine AS server-builder
 WORKDIR /app
 COPY server/package.json ./server/
-COPY package.json ./
-RUN npm install --workspace=server
+COPY package.json package-lock.json ./
+RUN npm ci --workspace=server
 COPY server/ ./server/
 RUN npm run build --workspace=server
 
 # ─── Runtime stage ────────────────────────────────────────────────────────────
-FROM node:22-alpine AS runtime
+FROM node:25-alpine AS runtime
 
 ARG BW_CLI_VERSION=2026.7.0
 ARG UID=1000
 
-# Install the Bitwarden CLI at a pinned version
+# Install the Bitwarden CLI at a pinned version, then strip npm itself out of the
+# runtime image: `bw` is a self-contained bundle invoked directly, npm is never
+# called after this point, and npm vendors its own (frequently vulnerable) copies
+# of tar/brace-expansion/sigstore/etc. that otherwise sit unused in the final image.
+# Also apply pending Alpine package patches (e.g. libssl/libcrypto point fixes that
+# lag the node:25-alpine base tag).
 RUN npm install -g @bitwarden/cli@${BW_CLI_VERSION} \
  && bw --version \
- && echo "Installed bw $(bw --version)"
+ && echo "Installed bw $(bw --version)" \
+ # CVE-2026-44705: patch the CLI's own vendored tmp@0.0.33 (pulled in by inquirer's
+ # external-editor, an interactive-only feature this app never triggers) up to a
+ # fixed release without waiting on an upstream @bitwarden/cli release. A second,
+ # more deeply nested copy under external-editor's own node_modules remains — it
+ # backs the same unreachable interactive-editor code path, so it's left alone
+ # rather than risk a hand-patched, unvetted dependency tree for no real exposure.
+ && npm install tmp@^0.2.6 --no-save --prefix /usr/local/lib/node_modules/@bitwarden/cli \
+ && npm uninstall -g npm corepack \
+ && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /root/.npm \
+ && apk upgrade --no-cache
 
 # Store the pinned version so the app can assert it at boot
 ENV BW_CLI_PINNED_VERSION=${BW_CLI_VERSION}
