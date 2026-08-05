@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useEffect, useMemo } from 'react';
 import {
   RefreshCw,
   Hash,
@@ -16,18 +16,9 @@ import {
   ArrowDown,
   Check,
 } from 'lucide-react';
-import {
-  AppConfig,
-  TargetStatus,
-  BackupSet,
-  Job,
-  Prompt,
-  CredentialPrompt,
-  JobState,
-  VaultStatus,
-} from '../types.js';
-import { getStatus, getBackups, createJob, getJob, openJobStream } from '../api.js';
-import { CredentialModal } from './CredentialModal.js';
+import { AppConfig, BackupSet, VaultStatus } from '../types.js';
+import { createJob } from '../api.js';
+import { useDashboardData } from '../state/DashboardData.js';
 import { Button } from './ui/Button.js';
 import { Card, StatCard } from './ui/Card.js';
 import { Badge, StatusLabel } from './ui/Badge.js';
@@ -35,13 +26,7 @@ import { Checkbox } from './ui/Checkbox.js';
 import { Alert } from './ui/Input.js';
 import { Tooltip, EmptyState } from './ui/Feedback.js';
 import { cn } from '../lib/cn.js';
-import {
-  isActive,
-  vaultTone,
-  formatBytes,
-  backupAge,
-  parseTimestamp,
-} from '../lib/status.js';
+import { vaultTone, formatBytes, backupAge, parseTimestamp } from '../lib/status.js';
 
 interface Props {
   config: AppConfig;
@@ -57,15 +42,21 @@ interface Target {
 }
 
 export function Dashboard({ config, onJobCreated }: Props) {
-  const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
-  const [status, setStatus] = useState<Record<string, TargetStatus>>({});
-  const [backupSets, setBackupSets] = useState<BackupSet[]>([]);
-  const [loadingStatus, setLoadingStatus] = useState(false);
-  const [error, setError] = useState('');
-  const [liveCounts, setLiveCounts] = useState<Record<string, { cloud?: number; home?: number }>>({});
-  const [countJobId, setCountJobId] = useState<string | null>(null);
-  const [countJob, setCountJob] = useState<Job | null>(null);
-  const [countLoading, setCountLoading] = useState(false);
+  // Lives above the page switch so it survives navigating to Jobs/Backups and back.
+  const {
+    status,
+    statusLoading,
+    refreshStatus,
+    liveCounts,
+    countLoading,
+    startCounts,
+    backupSets,
+    refreshBackups,
+    selectedTargets,
+    setSelectedTargets,
+    error,
+    setError,
+  } = useDashboardData();
 
   /** Users first, each immediately followed by the orgs it owns. */
   const allTargets = useMemo<Target[]>(() => {
@@ -92,29 +83,11 @@ export function Dashboard({ config, onJobCreated }: Props) {
     return ordered;
   }, [config]);
 
+  // Re-read the inventory each time the dashboard is shown; the cached sets stay
+  // on screen meanwhile, so a job run elsewhere is picked up without a blank flash.
   useEffect(() => {
-    loadBackups();
-  }, []);
-
-  async function loadBackups() {
-    try {
-      const inv = await getBackups();
-      setBackupSets(inv.managed);
-    } catch { /* non-fatal */ }
-  }
-
-  async function handleRefreshStatus() {
-    setLoadingStatus(true);
-    setError('');
-    try {
-      const s = await getStatus();
-      setStatus(s);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to refresh status');
-    } finally {
-      setLoadingStatus(false);
-    }
-  }
+    refreshBackups();
+  }, [refreshBackups]);
 
   function toggleTarget(key: string) {
     setSelectedTargets((prev) => {
@@ -144,62 +117,6 @@ export function Dashboard({ config, onJobCreated }: Props) {
     }
   }
 
-  async function startCountJob() {
-    setError('');
-    setCountLoading(true);
-    try {
-      const r = await createJob(effectiveTargets(), ['count']);
-      setCountJobId(r.jobId);
-    } catch (e: unknown) {
-      setError(e instanceof Error ? e.message : 'Failed to fetch live item counts');
-      setCountLoading(false);
-    }
-  }
-
-  useEffect(() => {
-    if (!countJobId) return;
-    const ws = openJobStream(countJobId);
-
-    async function finish() {
-      try {
-        const full = await getJob(countJobId!);
-        if (full.results) {
-          setLiveCounts((prev) => {
-            const next = { ...prev };
-            for (const [key, r] of Object.entries(full.results!)) {
-              next[key] = { cloud: r.cloud, home: r.home };
-            }
-            return next;
-          });
-        }
-      } catch {
-        setError('Failed to load live item count results');
-      } finally {
-        setCountLoading(false);
-        setCountJobId(null);
-        setCountJob(null);
-      }
-    }
-
-    ws.onmessage = (evt) => {
-      const msg = JSON.parse(evt.data as string) as { type: string; data?: unknown; job?: Job };
-      if (msg.type === 'snapshot' && msg.job) {
-        setCountJob(msg.job);
-        if (!isActive(msg.job.state)) finish();
-      } else if (msg.type === 'prompt') {
-        const prompt = msg.data as Prompt | null;
-        setCountJob((prev) => prev ? { ...prev, prompt: prompt ?? undefined } : prev);
-      } else if (msg.type === 'job' && msg.data) {
-        const upd = msg.data as { state: JobState };
-        setCountJob((prev) => prev ? { ...prev, state: upd.state } : prev);
-        if (!isActive(upd.state)) finish();
-      }
-    };
-    ws.onerror = () => setError('WebSocket error while fetching live item counts');
-
-    return () => ws.close();
-  }, [countJobId]);
-
   /** Newest backup set per target, plus set count. */
   const perTarget = useMemo(() => {
     const map = new Map<string, { newest: BackupSet | null; count: number }>();
@@ -228,7 +145,6 @@ export function Dashboard({ config, onJobCreated }: Props) {
 
   const allSelected = selectedTargets.size === allTargets.length && allTargets.length > 0;
   const someSelected = selectedTargets.size > 0 && !allSelected;
-  const countPrompt: Prompt | undefined = countJob?.prompt;
   const staleness = summary.oldest ? backupAge(summary.oldest.timestamp) : null;
 
   return (
@@ -293,8 +209,8 @@ export function Dashboard({ config, onJobCreated }: Props) {
               size="sm"
               variant="ghost"
               icon={<RefreshCw />}
-              loading={loadingStatus}
-              onClick={handleRefreshStatus}
+              loading={statusLoading}
+              onClick={refreshStatus}
             >
               Vault status
             </Button>
@@ -305,7 +221,7 @@ export function Dashboard({ config, onJobCreated }: Props) {
                   variant="ghost"
                   icon={<Hash />}
                   loading={countLoading}
-                  onClick={startCountJob}
+                  onClick={() => startCounts(effectiveTargets())}
                 >
                   Live counts
                 </Button>
@@ -444,14 +360,6 @@ export function Dashboard({ config, onJobCreated }: Props) {
           </div>
         </div>
       </div>
-
-      {countPrompt?.kind === 'credentials' && countJobId && (
-        <CredentialModal
-          jobId={countJobId}
-          prompt={countPrompt as CredentialPrompt}
-          onSubmitted={() => setCountJob((prev) => prev ? { ...prev, prompt: undefined } : prev)}
-        />
-      )}
     </div>
   );
 }

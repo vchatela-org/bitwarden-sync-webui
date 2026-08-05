@@ -7,6 +7,7 @@ import { JobView } from './components/JobView.js';
 import { JobList } from './components/JobList.js';
 import { BackupsPage } from './components/BackupsPage.js';
 import { LoadingPane, TooltipProvider, EmptyState } from './components/ui/Feedback.js';
+import { DashboardDataProvider } from './state/DashboardData.js';
 import { getMe, getConfig, logout } from './api.js';
 import { AppConfig } from './types.js';
 
@@ -71,39 +72,41 @@ export default function App() {
 
   return (
     <TooltipProvider delayDuration={300} skipDelayDuration={200}>
-      <div className="min-h-screen">
-        <Header
-          config={config}
-          onLogout={handleLogout}
-          currentPage={page}
-          onNavigate={setPage}
-        />
+      <DashboardDataProvider>
+        <div className="min-h-screen">
+          <Header
+            config={config}
+            onLogout={handleLogout}
+            currentPage={page}
+            onNavigate={setPage}
+          />
 
-        <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6">
-          {page === 'dashboard' &&
-            (config ? (
-              <Dashboard config={config} onJobCreated={handleJobCreated} />
-            ) : (
-              <EmptyState
-                icon={<AlertTriangle className="text-warn" />}
-                title="Configuration not loaded"
-                description="targets.json is missing or invalid. Check /api/health for the validation error."
-              />
-            ))}
+          <main className="mx-auto max-w-[1600px] px-4 py-6 sm:px-6">
+            {page === 'dashboard' &&
+              (config ? (
+                <Dashboard config={config} onJobCreated={handleJobCreated} />
+              ) : (
+                <EmptyState
+                  icon={<AlertTriangle className="text-warn" />}
+                  title="Configuration not loaded"
+                  description="targets.json is missing or invalid. Check /api/health for the validation error."
+                />
+              ))}
 
-          {page === 'jobs' &&
-            (activeJobId ? (
-              <div className="space-y-8">
-                <JobView jobId={activeJobId} onBack={() => setActiveJobId(null)} />
-                <JobList onSelectJob={setActiveJobId} activeJobId={activeJobId} compact />
-              </div>
-            ) : (
-              <JobList onSelectJob={setActiveJobId} />
-            ))}
+            {page === 'jobs' &&
+              (activeJobId ? (
+                <div className="space-y-8">
+                  <JobView jobId={activeJobId} onBack={() => setActiveJobId(null)} />
+                  <JobList onSelectJob={setActiveJobId} activeJobId={activeJobId} compact />
+                </div>
+              ) : (
+                <JobList onSelectJob={setActiveJobId} />
+              ))}
 
-          {page === 'backups' && config && <BackupsPage config={config} />}
-        </main>
-      </div>
+            {page === 'backups' && config && <BackupsPage config={config} />}
+          </main>
+        </div>
+      </DashboardDataProvider>
     </TooltipProvider>
   );
 }
