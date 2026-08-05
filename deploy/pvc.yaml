@@ -1,0 +1,29 @@
+---
+# PVC for CLI profile directories (/data) — CRITICAL.
+# Without this, every pod restart forces a full re-login with OTP for every account.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bitwarden-webui-data
+  namespace: bitwarden
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 1Gi
+  storageClassName: local-path   # adjust for your cluster
+
+---
+# PVC for backup files — use NFS or a large RWX volume in practice.
+# Alternatively, use an NFS hostPath mount (see deployment.yaml).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bitwarden-webui-backups
+  namespace: bitwarden
+spec:
+  accessModes: [ReadWriteOnce]
+  resources:
+    requests:
+      storage: 20Gi
+  storageClassName: local-path

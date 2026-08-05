@@ -1,0 +1,129 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bitwarden-webui
+  namespace: bitwarden
+spec:
+  replicas: 1
+  # Recreate — concurrent pods would fight over the shared CLI state directories.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: bitwarden-webui
+  template:
+    metadata:
+      labels:
+        app: bitwarden-webui
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+
+      containers:
+        - name: webui
+          image: ghcr.io/vchatela/bitwarden-webui:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              name: http
+          env:
+            - name: PORT
+              value: "3000"
+            - name: CONFIG_PATH
+              value: /config/targets.json
+            - name: DATA_DIR
+              value: /data
+            - name: LOG_LEVEL
+              value: info
+            - name: TRUST_PROXY
+              value: "1"
+            # Optional: mount an internal CA bundle.
+            # - name: NODE_EXTRA_CA_CERTS
+            #   value: /certs/ca.crt
+            - name: UI_PASSWORD_HASH
+              valueFrom:
+                secretKeyRef:
+                  name: bitwarden-webui-secrets
+                  key: UI_PASSWORD_HASH
+            - name: SESSION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: bitwarden-webui-secrets
+                  key: SESSION_SECRET
+
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+            - name: data
+              mountPath: /data
+            - name: backups
+              mountPath: /backups
+            - name: fifo
+              mountPath: /run/bw-fifo
+            - name: tmp
+              mountPath: /tmp
+            # Optional internal CA:
+            # - name: ca-bundle
+            #   mountPath: /certs
+            #   readOnly: true
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: [ALL]
+            readOnlyRootFilesystem: true
+
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            failureThreshold: 2
+
+      volumes:
+        - name: config
+          configMap:
+            name: bitwarden-webui-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: bitwarden-webui-data
+        - name: backups
+          persistentVolumeClaim:
+            claimName: bitwarden-webui-backups
+          # NFS alternative:
+          # nfs:
+          #   server: nas.example.internal
+          #   path: /backups/bitwarden
+        - name: fifo
+          emptyDir:
+            medium: Memory
+        - name: tmp
+          emptyDir:
+            medium: Memory
+        # - name: ca-bundle
+        #   configMap:
+        #     name: internal-ca
+
+      restartPolicy: Always
