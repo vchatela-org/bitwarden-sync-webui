@@ -2,8 +2,8 @@
 FROM node:25-alpine AS web-builder
 WORKDIR /app
 COPY web/package.json ./web/
-COPY package.json ./
-RUN npm install --workspace=web
+COPY package.json package-lock.json ./
+RUN npm ci --workspace=web
 COPY web/ ./web/
 RUN npm run build --workspace=web
 
@@ -11,8 +11,8 @@ RUN npm run build --workspace=web
 FROM node:25-alpine AS server-builder
 WORKDIR /app
 COPY server/package.json ./server/
-COPY package.json ./
-RUN npm install --workspace=server
+COPY package.json package-lock.json ./
+RUN npm ci --workspace=server
 COPY server/ ./server/
 RUN npm run build --workspace=server
 
