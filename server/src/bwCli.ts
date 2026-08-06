@@ -14,6 +14,12 @@ export interface BwSpawnOpts {
   stdin?: string; // written to piped stdin
   fifoPassword?: string; // if set, creates a FIFO and passes its path as --passwordfile arg position
   timeout?: number; // ms
+  // Commands like `list items` / `get item` / `edit item` print full vault contents
+  // (names, usernames, passwords, TOTP seeds, notes) to stdout as JSON. That output is
+  // for this process to parse, not for the job log/UI — set this to keep it out of
+  // onLog entirely (redact() only scrubs known secret *shapes*, it can't safely scrub
+  // arbitrary vault field values). stdout is still captured and returned to the caller.
+  silenceStdout?: boolean;
 }
 
 export interface BwResult {
@@ -164,7 +170,7 @@ export async function runBw(
     for (const line of lines) {
       const redacted = redact(line);
       stdoutChunks.push(redacted);
-      onLog?.('stdout', redacted);
+      if (!opts.silenceStdout) onLog?.('stdout', redacted);
     }
   });
 
@@ -196,7 +202,7 @@ export async function runBw(
       if (stdoutBuf) {
         const redacted = redact(stdoutBuf);
         stdoutChunks.push(redacted);
-        onLog?.('stdout', redacted);
+        if (!opts.silenceStdout) onLog?.('stdout', redacted);
       }
       if (stderrBuf) {
         const redacted = redact(stderrBuf);

@@ -77,10 +77,10 @@ export async function dedupeOrgCollections(opts: {
   for (const { duplicateId, originalId, name } of plan) {
     log?.('app' as never, `[collections] Merging duplicate '${name}' (${duplicateId}) → (${originalId})`);
 
-    // Get items in duplicate
+    // Get items in duplicate (full item contents incl. passwords — keep stdout out of the log)
     const listResult = await runBw(
       ['list', 'items', '--collectionid', duplicateId, '--session', sessionKey],
-      { profileDir, timeout: 30000 },
+      { profileDir, timeout: 30000, silenceStdout: true },
       log,
     );
     let dupItems: BwItem[] = [];
@@ -98,7 +98,7 @@ export async function dedupeOrgCollections(opts: {
     let moved = 0;
 
     for (const item of dupItems) {
-      const getResult = await runBw(['get', 'item', item.id, '--session', sessionKey], { profileDir, timeout: 10000 }, log);
+      const getResult = await runBw(['get', 'item', item.id, '--session', sessionKey], { profileDir, timeout: 10000, silenceStdout: true }, log);
       let fullItem: BwItem;
       try {
         fullItem = JSON.parse(getResult.stdout) as BwItem;
@@ -118,7 +118,7 @@ export async function dedupeOrgCollections(opts: {
       const encoded = Buffer.from(JSON.stringify(updatedItem)).toString('base64');
       const editResult = await runBw(
         ['edit', 'item', item.id, '--session', sessionKey],
-        { profileDir, stdin: encoded, timeout: 10000 },
+        { profileDir, stdin: encoded, timeout: 10000, silenceStdout: true },
         log,
       );
       if (editResult.exitCode !== 0) {

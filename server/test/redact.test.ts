@@ -12,6 +12,12 @@ describe('redact', () => {
     expect(out).not.toContain('ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890+/=');
   });
 
+  it('redacts a bare session key with nothing preceding it (bw login/unlock --raw output)', () => {
+    const line = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890+/=';
+    const out = redact(line);
+    expect(out).not.toContain('ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890+/=');
+  });
+
   it('redacts Bearer tokens', () => {
     const line = 'Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.payload.signature';
     const out = redact(line);

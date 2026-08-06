@@ -7,7 +7,11 @@
  *  - Any dynamically registered secret (passwords, OTPs)
  */
 
-const SESSION_KEY_RE = /(?<=[=\s'"]|--session\s|BW_SESSION[=\s'"])([A-Za-z0-9+/=]{20,})/g;
+// `bw login --raw` / `bw unlock --raw` print the session key as the *entire* line with
+// nothing preceding it, so the lookbehind must also accept start-of-string (^) — without
+// it, that exact output (the most common way a session key reaches a log line) slipped
+// through unredacted.
+const SESSION_KEY_RE = /(?<=^|[=\s'"]|--session\s|BW_SESSION[=\s'"])([A-Za-z0-9+/=]{20,})/g;
 const BEARER_RE = /Bearer\s+[A-Za-z0-9+/=._-]{10,}/gi;
 const JWT_RE = /eyJ[A-Za-z0-9+/=._-]{10,}\.[A-Za-z0-9+/=._-]{10,}\.[A-Za-z0-9+/=._-]{10,}/g;
 

@@ -9,7 +9,7 @@ import { dedupeOrgCollections } from './collections.js';
 import { computeDiff, evaluateGuard, DiffResult } from './diff.js';
 import { findNewestExport, BackupMeta, buildBackupFilename } from './backups.js';
 import { runBw, LogCallback, getCliVersion } from './bwCli.js';
-import { redact } from './redact.js';
+import { redact, clearAllSecrets } from './redact.js';
 import { createHash } from 'crypto';
 import { statSync } from 'fs';
 
@@ -551,7 +551,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
               kind: isOrg ? 'org' : 'user',
               timestamp: ts,
               itemCount: filteredMeta.length,
-              folderCount: isOrg ? undefined : (await runBw(['list', 'folders', '--session', cloudSession], { profileDir: cloudDir, timeout: 30000 }, log).then((r) => { try { return (JSON.parse(r.stdout) as unknown[]).length; } catch { return 0; } })),
+              folderCount: isOrg ? undefined : (await runBw(['list', 'folders', '--session', cloudSession], { profileDir: cloudDir, timeout: 30000, silenceStdout: true }, log).then((r) => { try { return (JSON.parse(r.stdout) as unknown[]).length; } catch { return 0; } })),
               collectionCount: isOrg ? filteredMeta.filter((i) => i['collectionIds']).length : null,
               sourceServer: config.cloudServerUrl,
               cliVersion: cliVer,
@@ -924,6 +924,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
     }
 
     clearAllPasswords();
+    clearAllSecrets();
     if ((job.state as string) === 'aborted') {
       // state already set
     } else if (anyFailed) {
@@ -934,6 +935,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
   } catch (err: unknown) {
     addLog(job, 'app', `❌ Job failed: ${err}`);
     clearAllPasswords();
+    clearAllSecrets();
     updateJobState(job, 'failed');
   } finally {
     currentStep.delete(job.id);

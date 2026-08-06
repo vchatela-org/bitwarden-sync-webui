@@ -1,5 +1,6 @@
 import { runBw, isValidSessionKey, BwResult, LogCallback } from './bwCli.js';
 import { getPassword, forgetPassword, cachePassword, passwordKey } from './secrets.js';
+import { registerSecret } from './redact.js';
 
 export type ProfileSide = 'cloud' | 'home';
 
@@ -147,6 +148,11 @@ export async function bwInit(opts: {
       return { ok: false, reason: 'needs-password', message: `Wrong password or OTP for ${pwKey} (attempt ${attempt})` };
     }
 
+    // Register the session key for exact-match redaction (belt-and-suspenders alongside
+    // the shape-based regex in redact.ts — a live session key grants full vault decrypt
+    // access, so it gets the same treatment as the master password).
+    registerSecret(sessionKey);
+
     // 4. Sync
     const syncResult = await runBw(['sync', '--session', sessionKey], { profileDir, timeout: 30000 }, log);
     if (syncResult.exitCode !== 0) {
@@ -192,7 +198,10 @@ export async function listItems(
   if (opts.organizationId) {
     args.push('--organizationid', opts.organizationId);
   }
-  const result = await runBw(args, { profileDir, timeout: 60000 }, log);
+  // The CLI dumps full item contents (names, usernames, passwords, TOTP, notes) as JSON
+  // to stdout here — that must never reach the job log/UI, so stdout is silenced. stderr
+  // (errors) still flows through `log` for diagnostics.
+  const result = await runBw(args, { profileDir, timeout: 60000, silenceStdout: true }, log);
   if (result.exitCode !== 0) return [];
   try {
     return JSON.parse(result.stdout) as unknown[];
