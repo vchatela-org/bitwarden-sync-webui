@@ -7,11 +7,11 @@ import {
   Prompt,
   TargetStatus,
 } from '../types.js';
-import { createJob, getBackups, getJob, getStatus, openJobStream } from '../api.js';
+import { createJob, getBackups, getLiveCounts, getStatus, openJobStream, LiveCountEntry } from '../api.js';
 import { CredentialModal } from '../components/CredentialModal.js';
 import { isActive } from '../lib/status.js';
 
-export type LiveCounts = Record<string, { cloud?: number; home?: number }>;
+export type LiveCounts = Record<string, LiveCountEntry>;
 
 interface DashboardData {
   /** Vault status per target. Only refreshed on demand — it unlocks vaults. */
@@ -19,7 +19,7 @@ interface DashboardData {
   statusLoading: boolean;
   refreshStatus: () => Promise<void>;
 
-  /** Live vault item counts, merged across every count job of this session. */
+  /** Live vault item counts with per-side timestamps, persisted server-side across reloads. */
   liveCounts: LiveCounts;
   countLoading: boolean;
   startCounts: (targets: string[]) => Promise<void>;
@@ -77,6 +77,13 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
     } catch { /* non-fatal */ }
   }, []);
 
+  // Live counts are persisted server-side (server/src/liveCounts.ts), so the last known count
+  // and when it was taken survive a page reload or a server restart — only a fresh 'count' job
+  // changes them from here on.
+  useEffect(() => {
+    getLiveCounts().then(setLiveCounts).catch(() => { /* non-fatal — dashboard still works without it */ });
+  }, []);
+
   const startCounts = useCallback(async (targets: string[]) => {
     setError('');
     setCountLoading(true);
@@ -98,16 +105,10 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
       if (finished) return;
       finished = true;
       try {
-        const full = await getJob(countJobId!);
-        if (full.results) {
-          setLiveCounts((prev) => {
-            const next = { ...prev };
-            for (const [key, r] of Object.entries(full.results!)) {
-              next[key] = { cloud: r.cloud, home: r.home };
-            }
-            return next;
-          });
-        }
+        // Re-read from the server rather than the job's in-memory `results`: each side is
+        // persisted as soon as it succeeds (see runner.ts), so this also picks up whatever
+        // targets finished counting even if the job as a whole ended up partial/failed.
+        setLiveCounts(await getLiveCounts());
       } catch {
         setError('Failed to load live item count results');
       } finally {

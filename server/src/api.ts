@@ -39,6 +39,7 @@ import {
   BackupSet,
 } from './backups.js';
 import { getBwStatus } from './session.js';
+import { getLiveCounts } from './liveCounts.js';
 import { cloudProfileDir, homeProfileDir, allTargetKeys, Config, ConfigLoadResult } from './config.js';
 import { getCliVersion } from './bwCli.js';
 
@@ -161,6 +162,13 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
       }
     }
     res.json(results);
+  });
+
+  // ── Live item counts ────────────────────────────────────────────────────────
+  // Persisted separately from jobs (server/src/liveCounts.ts) so the dashboard can show the last
+  // known count — and when it was taken — without keeping every 'count' job around.
+  app.get('/api/live-counts', requireAuth, (req: Request, res: Response): void => {
+    res.json(getLiveCounts());
   });
 
   // ── Jobs ──────────────────────────────────────────────────────────────────

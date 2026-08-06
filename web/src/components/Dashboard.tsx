@@ -26,7 +26,7 @@ import { Checkbox } from './ui/Checkbox.js';
 import { Alert } from './ui/Input.js';
 import { Tooltip, EmptyState } from './ui/Feedback.js';
 import { cn } from '../lib/cn.js';
-import { vaultTone, formatBytes, backupAge, parseTimestamp } from '../lib/status.js';
+import { vaultTone, formatBytes, backupAge, parseTimestamp, relativeTime } from '../lib/status.js';
 
 interface Props {
   config: AppConfig;
@@ -303,10 +303,18 @@ export function Dashboard({ config, onJobCreated }: Props) {
                         </div>
                       </td>
                       <td className="py-2.5 pr-3">
-                        <VaultCell status={st?.cloud} liveItems={liveCounts[target.key]?.cloud} />
+                        <VaultCell
+                          status={st?.cloud}
+                          liveItems={liveCounts[target.key]?.cloud}
+                          liveAt={liveCounts[target.key]?.cloudAt}
+                        />
                       </td>
                       <td className="py-2.5 pr-3">
-                        <VaultCell status={st?.home} liveItems={liveCounts[target.key]?.home} />
+                        <VaultCell
+                          status={st?.home}
+                          liveItems={liveCounts[target.key]?.home}
+                          liveAt={liveCounts[target.key]?.homeAt}
+                        />
                       </td>
                       <td className="py-2.5 pr-3">
                         {newest ? (
@@ -322,7 +330,11 @@ export function Dashboard({ config, onJobCreated }: Props) {
                         )}
                       </td>
                       <td className="py-2.5 pr-3 text-right">
-                        <ItemsCell lastKnown={newest?.meta?.itemCount} live={liveCounts[target.key]?.cloud} />
+                        <ItemsCell
+                          lastKnown={newest?.meta?.itemCount}
+                          live={liveCounts[target.key]?.cloud}
+                          liveAt={liveCounts[target.key]?.cloudAt}
+                        />
                       </td>
                       <td className="py-2.5 pr-4 text-right">
                         <span className={cn('tabular-nums', count > 0 ? 'text-fg-muted' : 'text-fg-faint')}>
@@ -377,7 +389,7 @@ function Th({ className, children }: { className?: string; children?: React.Reac
   );
 }
 
-function ItemsCell({ lastKnown, live }: { lastKnown?: number; live?: number }) {
+function ItemsCell({ lastKnown, live, liveAt }: { lastKnown?: number; live?: number; liveAt?: string }) {
   if (live === undefined) {
     return lastKnown !== undefined ? (
       <span className="tabular-nums text-fg-muted">{lastKnown.toLocaleString()}</span>
@@ -386,13 +398,22 @@ function ItemsCell({ lastKnown, live }: { lastKnown?: number; live?: number }) {
     );
   }
 
+  const tooltip = [
+    `Live vault: ${live}${liveAt ? ` (${relativeTime(liveAt)})` : ''}`,
+    lastKnown !== undefined ? `last backup: ${lastKnown}` : null,
+  ].filter(Boolean).join(' · ');
+
   if (lastKnown === undefined) {
-    return <span className="font-medium tabular-nums text-info">{live.toLocaleString()}</span>;
+    return (
+      <Tooltip content={tooltip}>
+        <span className="font-medium tabular-nums text-info">{live.toLocaleString()}</span>
+      </Tooltip>
+    );
   }
 
   const diff = live - lastKnown;
   return (
-    <Tooltip content={`Live vault: ${live} · last backup: ${lastKnown}`}>
+    <Tooltip content={tooltip}>
       <span className="inline-flex items-center justify-end gap-1.5">
         <span className="font-medium tabular-nums text-info">{live.toLocaleString()}</span>
         {diff === 0 ? (
@@ -413,13 +434,20 @@ function ItemsCell({ lastKnown, live }: { lastKnown?: number; live?: number }) {
   );
 }
 
-function VaultCell({ status, liveItems }: { status?: VaultStatus; liveItems?: number }) {
+function VaultCell({ status, liveItems, liveAt }: { status?: VaultStatus; liveItems?: number; liveAt?: string }) {
+  const liveLabel = liveItems !== undefined && (
+    <span className="inline-flex items-baseline gap-1 pl-3 text-[11px] font-medium tabular-nums text-info">
+      {liveItems.toLocaleString()} items
+      {liveAt && (
+        <Tooltip content={new Date(liveAt).toLocaleString()}>
+          <span className="font-normal text-fg-faint">· {relativeTime(liveAt)}</span>
+        </Tooltip>
+      )}
+    </span>
+  );
+
   if (!status) {
-    return liveItems !== undefined ? (
-      <span className="font-medium tabular-nums text-info">{liveItems.toLocaleString()} items</span>
-    ) : (
-      <span className="text-xs text-fg-faint">—</span>
-    );
+    return liveLabel || <span className="text-xs text-fg-faint">—</span>;
   }
   return (
     <Tooltip
@@ -434,11 +462,7 @@ function VaultCell({ status, liveItems }: { status?: VaultStatus; liveItems?: nu
         <StatusLabel tone={vaultTone(status.status)} pulse={status.status === 'unlocked'}>
           {status.status}
         </StatusLabel>
-        {liveItems !== undefined ? (
-          <span className="pl-3 text-[11px] font-medium tabular-nums text-info">
-            {liveItems.toLocaleString()} items
-          </span>
-        ) : (
+        {liveLabel || (
           status.lastSync && (
             <span className="pl-3 text-[11px] text-fg-faint">
               {new Date(status.lastSync).toLocaleDateString()}

@@ -10,6 +10,7 @@ import { computeDiff, evaluateGuard, DiffResult } from './diff.js';
 import { findNewestExport, BackupMeta, buildBackupFilename } from './backups.js';
 import { runBw, LogCallback, getCliVersion } from './bwCli.js';
 import { redact, clearAllSecrets } from './redact.js';
+import { recordLiveCount } from './liveCounts.js';
 import { createHash } from 'crypto';
 import { statSync } from 'fs';
 
@@ -882,6 +883,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
                 ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.saasId)
                 : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
               job.results[target] = { ...job.results[target], cloud: filtered.length };
+              recordLiveCount(target, 'cloud', filtered.length);
               updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items` });
             } catch (err: unknown) {
               updateStep(job, stepId, { state: 'failed', detail: String(err) });
@@ -937,6 +939,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
                   ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.homeId)
                   : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
                 job.results[target] = { ...job.results[target], home: filtered.length };
+                recordLiveCount(target, 'home', filtered.length);
                 updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items` });
               } catch (err: unknown) {
                 updateStep(job, stepId, { state: 'failed', detail: String(err) });

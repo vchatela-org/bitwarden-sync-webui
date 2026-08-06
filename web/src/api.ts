@@ -45,6 +45,17 @@ export async function getStatus(): Promise<Record<string, TargetStatus>> {
   return fetchJson<Record<string, TargetStatus>>('/api/status');
 }
 
+export interface LiveCountEntry {
+  cloud?: number;
+  cloudAt?: string;
+  home?: number;
+  homeAt?: string;
+}
+
+export async function getLiveCounts(): Promise<Record<string, LiveCountEntry>> {
+  return fetchJson<Record<string, LiveCountEntry>>('/api/live-counts');
+}
+
 export async function createJob(targets: string[], operations: string[], options = {}): Promise<{ jobId: string }> {
   return fetchJson<{ jobId: string }>('/api/jobs', {
     method: 'POST',
