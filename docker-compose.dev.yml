@@ -1,18 +1,18 @@
-# Production stack — pulls the published image from GHCR.
-# For building from source instead, see docker-compose.dev.yml.
+# Local development / testing stack — builds the image from source.
+# For running the published image instead, see docker-compose.yml.
 #
 # QUICK START
 # -----------
 # 1. Copy the example config and fill in your values:
 #      cp config/targets.json.example config/targets.json
 #
-# 2. Copy the env file and set at minimum UI_PASSWORD_HASH and SESSION_SECRET:
+# 2. Copy the env file and set at minimum UI_PASSWORD and SESSION_SECRET:
 #      cp .env.example .env
 #
-# 3. Pull and start:
-#      docker compose up
+# 3. Build and start:
+#      docker compose -f docker-compose.dev.yml up --build
 #
-# 4. Open http://localhost:3000 and log in.
+# 4. Open http://localhost:3000 and log in with your UI_PASSWORD.
 #
 # VOLUMES
 # -------
@@ -26,8 +26,9 @@
 
 services:
   webui:
-    image: ghcr.io/vchatela-org/bitwarden-sync-webui:latest
-    pull_policy: always
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
     env_file:

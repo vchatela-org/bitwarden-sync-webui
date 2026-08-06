@@ -89,6 +89,19 @@ docker build --build-arg BW_CLI_VERSION=2026.7.0 -t bitwarden-webui:latest .
 The published image is also available at `ghcr.io/vchatela-org/bitwarden-sync-webui` (tags: `latest`
 and semver versions) — see [Packages](https://github.com/vchatela-org/bitwarden-sync-webui/pkgs/container/bitwarden-sync-webui).
 
+### Docker Compose
+
+- `docker-compose.yml` — production stack, pulls the published GHCR image.
+- `docker-compose.dev.yml` — local development stack, builds the image from source.
+
+```bash
+# Production (pulls ghcr.io/vchatela-org/bitwarden-sync-webui:latest)
+docker compose up
+
+# Development (builds from source)
+docker compose -f docker-compose.dev.yml up --build
+```
+
 ---
 
 ## Deploying to k3s
