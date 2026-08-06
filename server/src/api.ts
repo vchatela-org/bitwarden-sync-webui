@@ -318,7 +318,7 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
   if (existsSync(publicDir)) {
     app.use(express.static(publicDir, { index: false }));
     // Express 5 / path-to-regexp v8 dropped the bare '*' wildcard — needs a named splat.
-    app.get('/*splat', generalLimiter, (req: Request, res: Response): void => {
+    app.get('/{*splat}', generalLimiter, (req: Request, res: Response): void => {
       if (req.path.startsWith('/api')) {
         res.status(404).json({ error: 'Not found' });
         return;
