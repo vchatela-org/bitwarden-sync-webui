@@ -5,3 +5,6 @@ coverage/
 .env
 .env.local
 .DS_Store
+/.config/
+/.data/
+/backups/
