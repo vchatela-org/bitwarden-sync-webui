@@ -22,6 +22,7 @@ import {
   getJob,
   listJobs,
   cancelJob,
+  deleteJobs,
   submitCredentials,
   submitConfirmation,
   addJobListener,
@@ -259,6 +260,15 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
     const ok = cancelJob(String(req.params['id']));
     if (!ok) { res.status(409).json({ error: 'Cannot cancel that job' }); return; }
     res.json({ ok: true });
+  });
+
+  app.post('/api/jobs/delete', requireAuth, requireCsrf, (req: Request, res: Response): void => {
+    const { ids } = req.body as { ids?: string[] };
+    if (!Array.isArray(ids) || ids.length === 0 || !ids.every((id) => typeof id === 'string')) {
+      res.status(400).json({ error: 'ids required' });
+      return;
+    }
+    res.json(deleteJobs(ids));
   });
 
   // ── Backups ───────────────────────────────────────────────────────────────

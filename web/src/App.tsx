@@ -58,6 +58,10 @@ export default function App() {
     setPage('jobs');
   }
 
+  function handleJobsDeleted(ids: string[]) {
+    setActiveJobId((prev) => (prev && ids.includes(prev) ? null : prev));
+  }
+
   if (authed === null) {
     return (
       <div className="flex min-h-screen items-center justify-center">
@@ -97,10 +101,15 @@ export default function App() {
               (activeJobId ? (
                 <div className="space-y-8">
                   <JobView jobId={activeJobId} onBack={() => setActiveJobId(null)} />
-                  <JobList onSelectJob={setActiveJobId} activeJobId={activeJobId} compact />
+                  <JobList
+                    onSelectJob={setActiveJobId}
+                    activeJobId={activeJobId}
+                    onJobsDeleted={handleJobsDeleted}
+                    compact
+                  />
                 </div>
               ) : (
-                <JobList onSelectJob={setActiveJobId} />
+                <JobList onSelectJob={setActiveJobId} onJobsDeleted={handleJobsDeleted} />
               ))}
 
             {page === 'backups' && config && <BackupsPage config={config} />}

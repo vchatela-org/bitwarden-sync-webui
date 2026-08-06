@@ -97,6 +97,17 @@ export function backupAge(ts: string): { label: string; tone: Tone } {
   return { label: `${Math.floor(days)}d ago`, tone: 'danger' };
 }
 
+/** Relative age of an arbitrary ISO timestamp, e.g. "12m ago", "3h ago", "2d ago". */
+export function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60_000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
 export function formatDuration(startedAt?: string, endedAt?: string): string | null {
   if (!startedAt || !endedAt) return null;
   const ms = new Date(endedAt).getTime() - new Date(startedAt).getTime();

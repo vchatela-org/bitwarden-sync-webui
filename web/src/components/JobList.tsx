@@ -1,33 +1,33 @@
 import { useState, useEffect } from 'react';
-import { Inbox, ChevronRight } from 'lucide-react';
+import { Inbox, ChevronRight, Trash2, AlertCircle } from 'lucide-react';
 import { Job } from '../types.js';
-import { listJobs } from '../api.js';
+import { listJobs, deleteJobs } from '../api.js';
 import { Card } from './ui/Card.js';
 import { StatusLabel } from './ui/Badge.js';
+import { Checkbox } from './ui/Checkbox.js';
+import { Button } from './ui/Button.js';
+import { Modal } from './ui/Modal.js';
+import { Alert } from './ui/Input.js';
 import { LoadingPane, EmptyState, Tooltip } from './ui/Feedback.js';
 import { cn } from '../lib/cn.js';
-import { JOB_TONE, JOB_LABEL, STEP_DOT_BG, isActive, formatDuration } from '../lib/status.js';
+import { JOB_TONE, JOB_LABEL, STEP_DOT_BG, isActive, formatDuration, relativeTime } from '../lib/status.js';
 
 interface Props {
   onSelectJob: (jobId: string) => void;
   activeJobId?: string;
   /** Rendered beneath an open job — trims the heading and caps the height. */
   compact?: boolean;
+  /** Called with ids that were actually deleted, so a parent can clear an open job that's gone. */
+  onJobsDeleted?: (ids: string[]) => void;
 }
 
-function relativeTime(iso: string): string {
-  const diff = Date.now() - new Date(iso).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return 'just now';
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
-}
-
-export function JobList({ onSelectJob, activeJobId, compact }: Props) {
+export function JobList({ onSelectJob, activeJobId, compact, onJobsDeleted }: Props) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirming, setConfirming] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [error, setError] = useState('');
 
   useEffect(() => {
     loadJobs();
@@ -39,22 +39,104 @@ export function JobList({ onSelectJob, activeJobId, compact }: Props) {
     try {
       const j = await listJobs();
       setJobs(j);
+      setSelected((prev) => {
+        const ids = new Set(j.map((job) => job.id));
+        const next = new Set([...prev].filter((id) => ids.has(id)));
+        return next.size === prev.size ? prev : next;
+      });
     } catch { /* ignore — the poll will retry */ }
     finally { setLoading(false); }
+  }
+
+  const deletableJobs = jobs.filter((j) => !isActive(j.state));
+  const selectableCount = deletableJobs.length;
+  const allSelected = selectableCount > 0 && selected.size === selectableCount;
+  const someSelected = selected.size > 0 && !allSelected;
+
+  function toggleJob(id: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
+
+  function toggleAll() {
+    setSelected((prev) =>
+      prev.size === selectableCount ? new Set() : new Set(deletableJobs.map((j) => j.id)),
+    );
+  }
+
+  async function handleDelete() {
+    setDeleting(true);
+    setError('');
+    try {
+      const ids = [...selected];
+      const result = await deleteJobs(ids);
+      setJobs((prev) => prev.filter((j) => !result.deleted.includes(j.id)));
+      setSelected(new Set());
+      setConfirming(false);
+      onJobsDeleted?.(result.deleted);
+      if (result.skipped.length > 0) {
+        setError(`${result.skipped.length} job${result.skipped.length === 1 ? '' : 's'} could not be deleted (still running).`);
+      }
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : 'Failed to delete jobs');
+    } finally {
+      setDeleting(false);
+    }
   }
 
   if (loading) return <LoadingPane label="Loading jobs…" />;
 
   return (
     <section className="space-y-3">
-      <div className="flex items-baseline gap-2">
-        <h2 className={cn('font-semibold tracking-tight text-fg', compact ? 'text-[13px]' : 'text-base')}>
-          {compact ? 'Recent jobs' : 'Job history'}
-        </h2>
-        {jobs.length > 0 && (
-          <span className="text-xs text-fg-subtle">{jobs.length}</span>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-baseline gap-2">
+          <h2 className={cn('font-semibold tracking-tight text-fg', compact ? 'text-[13px]' : 'text-base')}>
+            {compact ? 'Recent jobs' : 'Job history'}
+          </h2>
+          {jobs.length > 0 && (
+            <span className="text-xs text-fg-subtle">{jobs.length}</span>
+          )}
+        </div>
+
+        {!compact && jobs.length > 0 && (
+          <div className="ml-auto flex items-center gap-2">
+            {selected.size > 0 && (
+              <span className="text-xs text-fg-subtle">{selected.size} selected</span>
+            )}
+            <Tooltip content={selectableCount === 0 ? 'No finished jobs to delete' : undefined}>
+              <span>
+                <Button
+                  size="sm"
+                  variant="dangerSoft"
+                  icon={<Trash2 />}
+                  disabled={selected.size === 0}
+                  onClick={() => setConfirming(true)}
+                >
+                  Delete
+                </Button>
+              </span>
+            </Tooltip>
+          </div>
         )}
       </div>
+
+      {error && <Alert icon={<AlertCircle />}>{error}</Alert>}
+
+      {!compact && jobs.length > 0 && (
+        <label className="flex items-center gap-2 px-1 text-xs text-fg-subtle">
+          <Checkbox
+            checked={someSelected ? 'indeterminate' : allSelected}
+            onCheckedChange={toggleAll}
+            disabled={selectableCount === 0}
+            aria-label="Select all finished jobs"
+          />
+          Select all finished jobs
+        </label>
+      )}
 
       {jobs.length === 0 ? (
         <Card>
@@ -73,17 +155,33 @@ export function JobList({ onSelectJob, activeJobId, compact }: Props) {
             const done = job.steps.filter((s) => s.state === 'succeeded').length;
 
             return (
-              <button
+              <div
                 key={job.id}
-                onClick={() => onSelectJob(job.id)}
                 className={cn(
-                  'group block w-full rounded-xl border bg-surface px-4 py-3 text-left',
+                  'group flex items-stretch rounded-xl border bg-surface',
                   'transition-[border-color,background-color] duration-150',
                   active
                     ? 'border-accent-line bg-accent-soft'
                     : 'border-line hover:border-line-strong hover:bg-surface-2',
                 )}
               >
+                {!compact && (
+                  <div
+                    className="flex items-start pl-3.5 pt-3.5"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Checkbox
+                      checked={selected.has(job.id)}
+                      onCheckedChange={() => toggleJob(job.id)}
+                      disabled={running}
+                      aria-label={`Select job ${job.id.slice(0, 8)}`}
+                    />
+                  </div>
+                )}
+                <button
+                  onClick={() => onSelectJob(job.id)}
+                  className={cn('min-w-0 flex-1 px-4 py-3 text-left', !compact && 'pl-2.5')}
+                >
                 <div className="flex items-center gap-3">
                   <StatusLabel tone={JOB_TONE[job.state]} pulse={running}>
                     {JOB_LABEL[job.state]}
@@ -137,11 +235,32 @@ export function JobList({ onSelectJob, activeJobId, compact }: Props) {
                     </span>
                   </div>
                 )}
-              </button>
+                </button>
+              </div>
             );
           })}
         </div>
       )}
+
+      <Modal
+        open={confirming}
+        onOpenChange={setConfirming}
+        dismissible
+        icon={<Trash2 />}
+        iconTone="danger"
+        title={`Delete ${selected.size} job${selected.size === 1 ? '' : 's'}?`}
+        description="This permanently removes the job record and its logged output. Backup files on disk are not affected."
+        footer={
+          <>
+            <Button variant="ghost" onClick={() => setConfirming(false)} disabled={deleting}>
+              Cancel
+            </Button>
+            <Button variant="danger" icon={<Trash2 />} loading={deleting} onClick={handleDelete}>
+              Delete
+            </Button>
+          </>
+        }
+      />
     </section>
   );
 }

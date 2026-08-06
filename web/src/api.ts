@@ -64,6 +64,18 @@ export async function cancelJob(id: string): Promise<void> {
   await fetchJson(`/api/jobs/${id}/cancel`, { method: 'POST', body: '{}' });
 }
 
+export interface DeleteJobsResult {
+  deleted: string[];
+  skipped: { id: string; reason: 'not-found' | 'active' }[];
+}
+
+export async function deleteJobs(ids: string[]): Promise<DeleteJobsResult> {
+  return fetchJson<DeleteJobsResult>('/api/jobs/delete', {
+    method: 'POST',
+    body: JSON.stringify({ ids }),
+  });
+}
+
 export async function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number): Promise<void> {
   await fetchJson(`/api/jobs/${jobId}/credentials`, {
     method: 'POST',

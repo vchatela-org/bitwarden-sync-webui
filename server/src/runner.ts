@@ -1,5 +1,5 @@
 import { randomUUID } from 'crypto';
-import { mkdirSync, writeFileSync, readFileSync, readdirSync } from 'fs';
+import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { Config, buildAccountGroups, cloudProfileDir, homeProfileDir } from './config.js';
 import { bwInit, getBwStatus, lockProfile, logoutProfile, listItems, listOrgCollections, InitResult } from './session.js';
@@ -17,6 +17,9 @@ export type JobOperation = 'backup' | 'import' | 'both' | 'status' | 'diff' | 'c
 export type JobState = 'queued' | 'running' | 'awaiting-credentials' | 'awaiting-confirmation' | 'succeeded' | 'failed' | 'partial' | 'aborted';
 // Use a separate variable to track aborted state at runtime (the type above does include 'aborted')
 export type StepState = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'warning' | 'awaiting-input';
+
+/** Job states the runner can still move out of on its own — can be cancelled, can't be deleted. */
+const ACTIVE_JOB_STATES: JobState[] = ['queued', 'running', 'awaiting-credentials', 'awaiting-confirmation'];
 
 export interface Step {
   id: string;
@@ -316,7 +319,7 @@ export function submitConfirmation(jobId: string, target: string, decision: 'pro
 export function cancelJob(jobId: string): boolean {
   const job = jobs.get(jobId);
   if (!job) return false;
-  if (!['running', 'awaiting-credentials', 'awaiting-confirmation', 'queued'].includes(job.state)) return false;
+  if (!ACTIVE_JOB_STATES.includes(job.state)) return false;
   updateJobState(job, 'aborted');
   clearPrompt(job);
   // Wake any pending resolvers
@@ -328,6 +331,32 @@ export function cancelJob(jobId: string): boolean {
   }
   persistJob(job);
   return true;
+}
+
+export interface DeleteJobsResult {
+  deleted: string[];
+  skipped: { id: string; reason: 'not-found' | 'active' }[];
+}
+
+/** Removes finished jobs from memory and disk (their log/output record). Active jobs must be cancelled first. */
+export function deleteJobs(ids: string[]): DeleteJobsResult {
+  const deleted: string[] = [];
+  const skipped: DeleteJobsResult['skipped'] = [];
+
+  for (const id of ids) {
+    const job = jobs.get(id);
+    if (!job) { skipped.push({ id, reason: 'not-found' }); continue; }
+    if (ACTIVE_JOB_STATES.includes(job.state)) { skipped.push({ id, reason: 'active' }); continue; }
+
+    jobs.delete(id);
+    const idx = jobOrder.indexOf(id);
+    if (idx !== -1) jobOrder.splice(idx, 1);
+    currentStep.delete(id);
+    try { unlinkSync(join(JOBS_DIR, `${id}.json`)); } catch { /* already gone */ }
+    deleted.push(id);
+  }
+
+  return { deleted, skipped };
 }
 
 async function waitForCredentials(job: Job, accountKey: string, targets: string[], side: 'cloud' | 'home', needsOtp: boolean): Promise<{ password: string; otp?: string; otpMethod?: number }> {
