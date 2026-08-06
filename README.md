@@ -4,6 +4,7 @@
 [![GHCR Publish](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/ghcr-publish.yml/badge.svg)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/ghcr-publish.yml)
 [![Docker Build & Push](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/docker-build-push.yml/badge.svg)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/docker-build-push.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
+[![Vulnerabilities](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/vchatela-org/bitwarden-sync-webui/badges/vuln-badge.json)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/ghcr-publish.yml)
 
 A self-hosted **web UI for Bitwarden cloud → self-hosted vault synchronisation**, implemented as a
 TypeScript/Node.js backend + React SPA, deployed as a Docker image into a k3s cluster.

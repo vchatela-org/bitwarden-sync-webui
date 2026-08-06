@@ -4,6 +4,10 @@ on:
   push:
     tags:
       - "v*.*.*"
+  schedule:
+    # Re-scan the latest published image weekly so the vulnerability badge
+    # reflects newly disclosed CVEs even between releases.
+    - cron: '0 5 * * 1'
   workflow_dispatch:
 
 permissions:
@@ -20,6 +24,7 @@ jobs:
   build:
     name: 🐳 Docker build
     runs-on: ubuntu-latest
+    if: github.event_name != 'schedule'
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -62,3 +67,83 @@ jobs:
           subject-name: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           subject-digest: ${{ steps.push.outputs.digest }}
           push-to-registry: true
+
+  vulnerability-scan:
+    name: 🔍 Vulnerability scan
+    runs-on: ubuntu-latest
+    needs: build
+    # Runs after a fresh build/push, or standalone on the weekly schedule
+    # against whatever :latest currently points to.
+    if: always() && (needs.build.result == 'success' || needs.build.result == 'skipped')
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          format: json
+          output: trivy-results.json
+          severity: "CRITICAL,HIGH,MEDIUM,LOW"
+
+      - name: Build badge payload
+        run: |
+          CRITICAL=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="CRITICAL")] | length' trivy-results.json)
+          HIGH=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="HIGH")] | length' trivy-results.json)
+          MEDIUM=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="MEDIUM")] | length' trivy-results.json)
+          LOW=$(jq '[.Results[]?.Vulnerabilities[]? | select(.Severity=="LOW")] | length' trivy-results.json)
+
+          echo "Critical=$CRITICAL High=$HIGH Medium=$MEDIUM Low=$LOW"
+
+          if [ "$CRITICAL" -gt 0 ]; then
+            COLOR=red
+          elif [ "$HIGH" -gt 0 ]; then
+            COLOR=orange
+          elif [ "$MEDIUM" -gt 0 ]; then
+            COLOR=yellow
+          elif [ "$LOW" -gt 0 ]; then
+            COLOR=yellowgreen
+          else
+            COLOR=brightgreen
+          fi
+
+          jq -n \
+            --arg message "${CRITICAL}C ${HIGH}H ${MEDIUM}M ${LOW}L" \
+            --arg color "$COLOR" \
+            '{schemaVersion: 1, label: "vulnerabilities", message: $message, color: $color}' \
+            > vuln-badge.json
+
+      - name: Publish badge data
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          BRANCH=badges
+          WORKDIR=$(mktemp -d)
+
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          git clone --depth 1 "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" "$WORKDIR"
+          cd "$WORKDIR"
+
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            git fetch --depth 1 origin "$BRANCH"
+            git checkout "$BRANCH"
+          else
+            git checkout --orphan "$BRANCH"
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          cp "$GITHUB_WORKSPACE/vuln-badge.json" ./vuln-badge.json
+          git add vuln-badge.json
+
+          if git diff --cached --quiet; then
+            echo "No badge changes to publish"
+          else
+            git commit -m "Update vulnerability badge"
+            git push origin "$BRANCH"
+          fi
