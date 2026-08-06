@@ -10,12 +10,18 @@ import { LoadingPane, TooltipProvider, EmptyState } from './components/ui/Feedba
 import { DashboardDataProvider } from './state/DashboardData.js';
 import { getMe, getConfig, logout } from './api.js';
 import { AppConfig } from './types.js';
+import { loadMaskPreference, saveMaskPreference } from './lib/mask.js';
 
 export default function App() {
   const [authed, setAuthed] = useState<boolean | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [page, setPage] = useState<Page>('dashboard');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
+  const [maskSensitive, setMaskSensitive] = useState(loadMaskPreference);
+
+  useEffect(() => {
+    saveMaskPreference(maskSensitive);
+  }, [maskSensitive]);
 
   useEffect(() => {
     checkAuth();
@@ -100,16 +106,27 @@ export default function App() {
             {page === 'jobs' &&
               (activeJobId ? (
                 <div className="space-y-8">
-                  <JobView jobId={activeJobId} onBack={() => setActiveJobId(null)} />
+                  <JobView
+                    jobId={activeJobId}
+                    onBack={() => setActiveJobId(null)}
+                    masked={maskSensitive}
+                    onToggleMask={() => setMaskSensitive((m) => !m)}
+                  />
                   <JobList
                     onSelectJob={setActiveJobId}
                     activeJobId={activeJobId}
                     onJobsDeleted={handleJobsDeleted}
+                    masked={maskSensitive}
                     compact
                   />
                 </div>
               ) : (
-                <JobList onSelectJob={setActiveJobId} onJobsDeleted={handleJobsDeleted} />
+                <JobList
+                  onSelectJob={setActiveJobId}
+                  onJobsDeleted={handleJobsDeleted}
+                  masked={maskSensitive}
+                  onToggleMask={() => setMaskSensitive((m) => !m)}
+                />
               ))}
 
             {page === 'backups' && config && <BackupsPage config={config} />}

@@ -5,11 +5,14 @@ import { submitCredentials } from '../api.js';
 import { Modal } from './ui/Modal.js';
 import { Button } from './ui/Button.js';
 import { Input, Select, Field, Alert } from './ui/Input.js';
+import { maskValue } from '../lib/mask.js';
 
 interface Props {
   jobId: string;
   prompt: CredentialPrompt;
   onSubmitted: () => void;
+  /** When true, redact the account/target labels — for taking screenshots. */
+  masked?: boolean;
 }
 
 const OTP_METHODS = [
@@ -18,7 +21,7 @@ const OTP_METHODS = [
   { value: 3, label: 'YubiKey' },
 ];
 
-export function CredentialModal({ jobId, prompt, onSubmitted }: Props) {
+export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [otpMethod, setOtpMethod] = useState(prompt.otpMethod ?? 0);
@@ -65,7 +68,7 @@ export function CredentialModal({ jobId, prompt, onSubmitted }: Props) {
       description={
         <span className="inline-flex flex-wrap items-center gap-1.5">
           Unlocking
-          <strong className="font-medium text-fg">{prompt.accountKey}</strong>
+          <strong className="font-medium text-fg">{masked ? maskValue(prompt.accountKey) : prompt.accountKey}</strong>
           on
           <span className="inline-flex items-center gap-1 rounded-md border border-line bg-elevated px-1.5 py-px text-[11px] text-fg-muted">
             {isCloud ? (
@@ -77,7 +80,7 @@ export function CredentialModal({ jobId, prompt, onSubmitted }: Props) {
           </span>
           {prompt.targets && prompt.targets.length > 0 && (
             <span className="w-full text-[11px] text-fg-faint">
-              Covers: {prompt.targets.join(', ')}
+              Covers: {masked ? prompt.targets.map(maskValue).join(', ') : prompt.targets.join(', ')}
             </span>
           )}
         </span>

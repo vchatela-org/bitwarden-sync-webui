@@ -11,14 +11,19 @@ import { Card } from './ui/Card.js';
 import { Badge, StatusLabel } from './ui/Badge.js';
 import { Alert } from './ui/Input.js';
 import { LoadingPane, Tooltip } from './ui/Feedback.js';
+import { MaskToggle } from './ui/MaskToggle.js';
 import { JOB_TONE, JOB_LABEL, isActive, formatDuration } from '../lib/status.js';
+import { maskValue } from '../lib/mask.js';
 
 interface Props {
   jobId: string;
   onBack: () => void;
+  /** When true, redact emails and vault item details — for taking screenshots. */
+  masked?: boolean;
+  onToggleMask?: () => void;
 }
 
-export function JobView({ jobId, onBack }: Props) {
+export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
   const [job, setJob] = useState<Job | null>(null);
   const [selectedStep, setSelectedStep] = useState<string | undefined>();
   const [error, setError] = useState('');
@@ -104,11 +109,12 @@ export function JobView({ jobId, onBack }: Props) {
             <Badge key={op} tone="accent">{op}</Badge>
           ))}
           {job.targets.map((t) => (
-            <Badge key={t}>{t}</Badge>
+            <Badge key={t}>{masked ? maskValue(t) : t}</Badge>
           ))}
         </div>
 
         <div className="ml-auto flex items-center gap-3">
+          {onToggleMask && <MaskToggle masked={!!masked} onToggle={onToggleMask} />}
           {duration && <span className="text-xs tabular-nums text-fg-subtle">{duration}</span>}
           {running && (
             <Button variant="dangerSoft" size="sm" icon={<Ban />} onClick={handleCancel}>
@@ -166,7 +172,7 @@ export function JobView({ jobId, onBack }: Props) {
           </div>
         </div>
 
-        <Terminal logs={job.logs} filterStep={selectedStep} height={terminalHeight} />
+        <Terminal logs={job.logs} filterStep={selectedStep} height={terminalHeight} masked={masked} />
       </div>
 
       {prompt?.kind === 'credentials' && (
@@ -174,6 +180,7 @@ export function JobView({ jobId, onBack }: Props) {
           jobId={jobId}
           prompt={prompt as CredentialPrompt}
           onSubmitted={() => setJob((prev) => prev ? { ...prev, prompt: undefined } : prev)}
+          masked={masked}
         />
       )}
       {prompt?.kind === 'confirmation' && (
@@ -181,6 +188,7 @@ export function JobView({ jobId, onBack }: Props) {
           jobId={jobId}
           prompt={prompt as ConfirmationPrompt}
           onSubmitted={() => setJob((prev) => prev ? { ...prev, prompt: undefined } : prev)}
+          masked={masked}
         />
       )}
     </section>

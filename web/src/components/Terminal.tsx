@@ -4,6 +4,7 @@ import { Input } from './ui/Input.js';
 import { Button } from './ui/Button.js';
 import { Tooltip } from './ui/Feedback.js';
 import { cn } from '../lib/cn.js';
+import { maskEmails } from '../lib/mask.js';
 
 interface LogLine {
   ts: string;
@@ -16,6 +17,8 @@ interface Props {
   logs: LogLine[];
   filterStep?: string;
   height?: number;
+  /** When true, redact email addresses in the rendered/copied/downloaded output. */
+  masked?: boolean;
 }
 
 const STREAM_STYLE: Record<string, string> = {
@@ -30,7 +33,7 @@ const LINE_STYLE: Record<string, string> = {
   app: 'text-fg',
 };
 
-export function Terminal({ logs, filterStep, height = 340 }: Props) {
+export function Terminal({ logs, filterStep, height = 340, masked }: Props) {
   const [filter, setFilter] = useState('');
   const [paused, setPaused] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -67,7 +70,7 @@ export function Terminal({ logs, filterStep, height = 340 }: Props) {
   }
 
   function asText(): string {
-    return displayed.map((l) => `[${l.ts}] [${l.stream}] ${l.line}`).join('\n');
+    return displayed.map((l) => `[${l.ts}] [${l.stream}] ${masked ? maskEmails(l.line) : l.line}`).join('\n');
   }
 
   function copyAll() {
@@ -158,7 +161,7 @@ export function Terminal({ logs, filterStep, height = 340 }: Props) {
                 {line.stream}
               </span>
               <span className={cn('min-w-0 flex-1 whitespace-pre-wrap break-all', LINE_STYLE[line.stream])}>
-                {line.line}
+                {masked ? maskEmails(line.line) : line.line}
               </span>
             </div>
           ))

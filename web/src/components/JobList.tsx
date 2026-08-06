@@ -9,8 +9,10 @@ import { Button } from './ui/Button.js';
 import { Modal } from './ui/Modal.js';
 import { Alert } from './ui/Input.js';
 import { LoadingPane, EmptyState, Tooltip } from './ui/Feedback.js';
+import { MaskToggle } from './ui/MaskToggle.js';
 import { cn } from '../lib/cn.js';
 import { JOB_TONE, JOB_LABEL, STEP_DOT_BG, isActive, formatDuration, relativeTime } from '../lib/status.js';
+import { maskValue } from '../lib/mask.js';
 
 interface Props {
   onSelectJob: (jobId: string) => void;
@@ -19,9 +21,12 @@ interface Props {
   compact?: boolean;
   /** Called with ids that were actually deleted, so a parent can clear an open job that's gone. */
   onJobsDeleted?: (ids: string[]) => void;
+  /** When true, redact target labels — for taking screenshots. */
+  masked?: boolean;
+  onToggleMask?: () => void;
 }
 
-export function JobList({ onSelectJob, activeJobId, compact, onJobsDeleted }: Props) {
+export function JobList({ onSelectJob, activeJobId, compact, onJobsDeleted, masked, onToggleMask }: Props) {
   const [jobs, setJobs] = useState<Job[]>([]);
   const [loading, setLoading] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -104,6 +109,7 @@ export function JobList({ onSelectJob, activeJobId, compact, onJobsDeleted }: Pr
 
         {!compact && jobs.length > 0 && (
           <div className="ml-auto flex items-center gap-2">
+            {onToggleMask && <MaskToggle masked={!!masked} onToggle={onToggleMask} />}
             {selected.size > 0 && (
               <span className="text-xs text-fg-subtle">{selected.size} selected</span>
             )}
@@ -211,7 +217,9 @@ export function JobList({ onSelectJob, activeJobId, compact, onJobsDeleted }: Pr
                 <div className="mt-1.5 flex items-center gap-2 text-xs text-fg-muted">
                   <span className="font-medium capitalize">{job.operations.join(' + ')}</span>
                   <span className="text-fg-faint">·</span>
-                  <span className="truncate">{job.targets.join(', ')}</span>
+                  <span className="truncate">
+                    {masked ? job.targets.map(maskValue).join(', ') : job.targets.join(', ')}
+                  </span>
                 </div>
 
                 {job.steps.length > 0 && (

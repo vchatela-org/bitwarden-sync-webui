@@ -6,17 +6,20 @@ import { Modal } from './ui/Modal.js';
 import { Button } from './ui/Button.js';
 import { Alert } from './ui/Input.js';
 import { cn } from '../lib/cn.js';
+import { maskValue } from '../lib/mask.js';
 
 interface Props {
   jobId: string;
   prompt: ConfirmationPrompt;
   onSubmitted: () => void;
+  /** When true, redact the target and vault item names/usernames — for taking screenshots. */
+  masked?: boolean;
 }
 
 const REMOVED_PREVIEW = 10;
 const ADDED_PREVIEW = 5;
 
-export function ConfirmModal({ jobId, prompt, onSubmitted }: Props) {
+export function ConfirmModal({ jobId, prompt, onSubmitted, masked }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const { diff } = prompt;
@@ -53,8 +56,9 @@ export function ConfirmModal({ jobId, prompt, onSubmitted }: Props) {
       title="Import guard tripped"
       description={
         <>
-          The import into <strong className="font-medium text-fg">{prompt.target}</strong> looks
-          destructive and was paused for review.
+          The import into{' '}
+          <strong className="font-medium text-fg">{masked ? maskValue(prompt.target) : prompt.target}</strong>{' '}
+          looks destructive and was paused for review.
         </>
       }
       className="w-[min(calc(100vw-2rem),36rem)]"
@@ -101,6 +105,7 @@ export function ConfirmModal({ jobId, prompt, onSubmitted }: Props) {
           title="Would be removed"
           items={diff.removed}
           preview={REMOVED_PREVIEW}
+          masked={masked}
         />
         <DiffList
           tone="ok"
@@ -108,6 +113,7 @@ export function ConfirmModal({ jobId, prompt, onSubmitted }: Props) {
           title="Would be added"
           items={diff.added}
           preview={ADDED_PREVIEW}
+          masked={masked}
         />
 
         {diff.unchanged > 0 && (
@@ -161,12 +167,14 @@ function DiffList({
   title,
   items,
   preview,
+  masked,
 }: {
   tone: 'ok' | 'danger';
   icon: React.ReactNode;
   title: string;
   items: DiffItem[];
   preview: number;
+  masked?: boolean;
 }) {
   if (items.length === 0) return null;
 
@@ -183,9 +191,11 @@ function DiffList({
       <div className="scrollbar-thin max-h-40 overflow-y-auto rounded-lg border border-line bg-surface-2 px-3 py-2">
         {items.slice(0, preview).map((item, i) => (
           <div key={i} className="flex items-baseline gap-2 py-0.5 text-xs">
-            <span className="truncate text-fg">{item.name}</span>
+            <span className="truncate text-fg">{masked ? maskValue(item.name) : item.name}</span>
             {item.username && (
-              <span className="shrink-0 font-mono text-[11px] text-fg-subtle">{item.username}</span>
+              <span className="shrink-0 font-mono text-[11px] text-fg-subtle">
+                {masked ? maskValue(item.username) : item.username}
+              </span>
             )}
           </div>
         ))}
