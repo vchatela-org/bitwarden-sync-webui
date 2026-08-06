@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { KeyRound, Cloud, HardDrive, AlertCircle } from 'lucide-react';
 import { CredentialPrompt } from '../types.js';
-import { submitCredentials } from '../api.js';
+import { submitCredentials, cancelJob } from '../api.js';
 import { Modal } from './ui/Modal.js';
 import { Button } from './ui/Button.js';
 import { Input, Select, Field, Alert } from './ui/Input.js';
@@ -27,8 +27,21 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
   const [otpMethod, setOtpMethod] = useState(prompt.otpMethod ?? 0);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
 
   const isCloud = prompt.side === 'cloud';
+
+  async function handleCancel() {
+    setError('');
+    setCancelling(true);
+    try {
+      await cancelJob(jobId);
+      onSubmitted();
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel job');
+      setCancelling(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -86,15 +99,25 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
         </span>
       }
       footer={
-        <Button
-          type="submit"
-          form={formId}
-          variant="primary"
-          loading={loading}
-          disabled={!canSubmit}
-        >
-          {loading ? 'Unlocking…' : 'Unlock vault'}
-        </Button>
+        <>
+          <Button
+            variant="dangerSoft"
+            onClick={handleCancel}
+            loading={cancelling}
+            disabled={loading}
+          >
+            Cancel job
+          </Button>
+          <Button
+            type="submit"
+            form={formId}
+            variant="primary"
+            loading={loading}
+            disabled={!canSubmit || cancelling}
+          >
+            {loading ? 'Unlocking…' : 'Unlock vault'}
+          </Button>
+        </>
       }
     >
       <form id={formId} onSubmit={handleSubmit} className="space-y-3.5 pb-4">

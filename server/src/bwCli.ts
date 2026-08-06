@@ -156,6 +156,10 @@ export async function runBw(
     child.stdin!.end();
   }
 
+  // `stdoutChunks`/`stderrChunks` hold the RAW lines and become `result.stdout`/`result.stderr` —
+  // callers (session.ts, collections.ts, runner.ts) parse these for session keys and JSON vault
+  // data, so they must never be redacted. `redact()` is applied only to what goes to `onLog`,
+  // the separate stream shown in the job log/UI.
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
 
@@ -168,9 +172,8 @@ export async function runBw(
     const lines = stdoutBuf.split('\n');
     stdoutBuf = lines.pop() ?? '';
     for (const line of lines) {
-      const redacted = redact(line);
-      stdoutChunks.push(redacted);
-      if (!opts.silenceStdout) onLog?.('stdout', redacted);
+      stdoutChunks.push(line);
+      if (!opts.silenceStdout) onLog?.('stdout', redact(line));
     }
   });
 
@@ -180,9 +183,8 @@ export async function runBw(
     const lines = stderrBuf.split('\n');
     stderrBuf = lines.pop() ?? '';
     for (const line of lines) {
-      const redacted = redact(line);
-      stderrChunks.push(redacted);
-      onLog?.('stderr', redacted);
+      stderrChunks.push(line);
+      onLog?.('stderr', redact(line));
     }
   });
 
@@ -198,16 +200,15 @@ export async function runBw(
       if (timer) clearTimeout(timer);
       fifoCleanup?.();
 
-      // Flush remaining buffered lines
+      // Flush remaining buffered lines (e.g. `--raw` output, which ends without a
+      // trailing newline and so never hits the per-line handlers above)
       if (stdoutBuf) {
-        const redacted = redact(stdoutBuf);
-        stdoutChunks.push(redacted);
-        if (!opts.silenceStdout) onLog?.('stdout', redacted);
+        stdoutChunks.push(stdoutBuf);
+        if (!opts.silenceStdout) onLog?.('stdout', redact(stdoutBuf));
       }
       if (stderrBuf) {
-        const redacted = redact(stderrBuf);
-        stderrChunks.push(redacted);
-        onLog?.('stderr', redacted);
+        stderrChunks.push(stderrBuf);
+        onLog?.('stderr', redact(stderrBuf));
       }
 
       resolve({
