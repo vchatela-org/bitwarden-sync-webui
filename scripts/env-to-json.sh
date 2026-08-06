@@ -29,7 +29,8 @@ USERS_JSON=$(
   done | jq -s '.'
 )
 
-# Build orgs array
+# Build orgs array — "cloud"/"home" match the vault keys emitted below, and every
+# org/user keeps syncing cloud -> home, exactly as the old fixed two-server model did.
 ORGS_JSON=$(
   for key in "${!ORG_NAMES[@]}"; do
     name="${ORG_NAMES[$key]}"
@@ -42,9 +43,11 @@ ORGS_JSON=$(
       --arg o "$owner" \
       --arg s "$saasId" \
       --arg h "$homeId" \
-      '{"key":$k,"name":$n,"owner":$o,"saasId":$s,"homeId":$h}'
+      '{"key":$k,"name":$n,"owner":$o,"from":"cloud","to":"home","orgIds":{"cloud":$s,"home":$h}}'
   done | jq -s '.'
 )
+
+USERS_JSON=$(echo "$USERS_JSON" | jq '[.[] | . + {"from":"cloud","to":"home"}]')
 
 jq -n \
   --arg cloud "$CLOUD_URL" \
@@ -54,8 +57,10 @@ jq -n \
   --argjson users "$USERS_JSON" \
   --argjson orgs "$ORGS_JSON" \
   '{
-    cloudServerUrl: $cloud,
-    homeServerUrl:  $home,
+    vaults: [
+      { key: "cloud", name: "Cloud", serverUrl: $cloud },
+      { key: "home",  name: "Home",  serverUrl: $home }
+    ],
     backupFolder:   $backup,
     bitwardenConfigDir: $cfg,
     users: $users,

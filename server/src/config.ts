@@ -2,18 +2,27 @@ import { z } from 'zod';
 import { readFileSync } from 'fs';
 import { resolve } from 'path';
 
+const vaultSchema = z.object({
+  key: z.string().min(1),
+  name: z.string().min(1),
+  serverUrl: z.string().url(),
+});
+
 const userSchema = z.object({
   key: z.string().min(1),
   email: z.string().email(),
   displayName: z.string().optional(),
+  from: z.string().min(1),
+  to: z.string().min(1),
 });
 
 const orgSchema = z.object({
   key: z.string().min(1),
   name: z.string().min(1),
   owner: z.string().min(1),
-  saasId: z.guid(),
-  homeId: z.guid(),
+  from: z.string().min(1),
+  to: z.string().min(1),
+  orgIds: z.record(z.string().min(1), z.guid()),
 });
 
 const retentionSchema = z.object({
@@ -27,8 +36,7 @@ const importGuardSchema = z.object({
 });
 
 const configSchema = z.object({
-  cloudServerUrl: z.string().url(),
-  homeServerUrl: z.string().url(),
+  vaults: z.array(vaultSchema).min(2),
   backupFolder: z.string().min(1),
   bitwardenConfigDir: z.string().min(1),
   users: z.array(userSchema).min(1),
@@ -39,6 +47,7 @@ const configSchema = z.object({
 });
 
 export type Config = z.infer<typeof configSchema>;
+export type VaultConfig = z.infer<typeof vaultSchema>;
 export type UserConfig = z.infer<typeof userSchema>;
 export type OrgConfig = z.infer<typeof orgSchema>;
 
@@ -46,24 +55,50 @@ export type ConfigLoadResult =
   | { ok: true; config: Config }
   | { ok: false; error: string };
 
-/** Capitalise only the first character, same as bash's ${key^} */
-export function capitaliseFirst(s: string): string {
-  if (!s) return s;
-  return s[0].toUpperCase() + s.slice(1);
+/**
+ * Filesystem-safe, vault-aware bw CLI profile dir for a (user, vault) pair.
+ * Clean break from the old Alice/Home_Alice scheme — no back-compat shim; users
+ * re-enter their master password once post-upgrade (already handled gracefully
+ * by the existing credential-prompt flow).
+ */
+export function profileDir(configDir: string, userKey: string, vaultKey: string): string {
+  return resolve(configDir, `${userKey}__${vaultKey}`);
 }
 
-/** Cloud profile dir for a user key */
-export function cloudProfileDir(configDir: string, userKey: string): string {
-  return resolve(configDir, capitaliseFirst(userKey));
+/**
+ * Looks up a vault by key. Config is validated at load time, so any key
+ * reaching here (from a target's from/to or an org's orgIds) is guaranteed
+ * present — throw, don't silently fall back.
+ */
+export function vaultByKey(config: Config, key: string): VaultConfig {
+  const v = config.vaults.find((v) => v.key === key);
+  if (!v) throw new Error(`Internal error: unknown vault key '${key}'`);
+  return v;
 }
 
-/** Home profile dir for a user key */
-export function homeProfileDir(configDir: string, userKey: string): string {
-  return resolve(configDir, `Home_${capitaliseFirst(userKey)}`);
-}
+function validateTargets(config: Config): string | null {
+  const vaultKeys = new Set<string>();
+  for (const v of config.vaults) {
+    if (vaultKeys.has(v.key)) {
+      return `Duplicate vault key '${v.key}'`;
+    }
+    vaultKeys.add(v.key);
+  }
 
-function validateOrgs(config: Config): string | null {
   const userKeys = new Set(config.users.map((u) => u.key));
+
+  for (const user of config.users) {
+    if (!vaultKeys.has(user.from)) {
+      return `User '${user.key}' has unknown from-vault '${user.from}'`;
+    }
+    if (!vaultKeys.has(user.to)) {
+      return `User '${user.key}' has unknown to-vault '${user.to}'`;
+    }
+    if (user.from === user.to) {
+      return `User '${user.key}' has the same from and to vault ('${user.from}')`;
+    }
+  }
+
   for (const org of config.orgs) {
     if (!org.owner) {
       return `Organization '${org.key}' has no owner configured`;
@@ -71,11 +106,20 @@ function validateOrgs(config: Config): string | null {
     if (!userKeys.has(org.owner)) {
       return `Organization '${org.key}' owner '${org.owner}' is not in users`;
     }
-    if (!org.saasId) {
-      return `Organization '${org.key}' is missing saasId (cloud org id)`;
+    if (!vaultKeys.has(org.from)) {
+      return `Organization '${org.key}' has unknown from-vault '${org.from}'`;
     }
-    if (!org.homeId) {
-      return `Organization '${org.key}' is missing homeId (home-server org id)`;
+    if (!vaultKeys.has(org.to)) {
+      return `Organization '${org.key}' has unknown to-vault '${org.to}'`;
+    }
+    if (org.from === org.to) {
+      return `Organization '${org.key}' has the same from and to vault ('${org.from}')`;
+    }
+    if (!org.orgIds[org.from]) {
+      return `Organization '${org.key}' is missing orgIds['${org.from}'] (from-vault org id)`;
+    }
+    if (!org.orgIds[org.to]) {
+      return `Organization '${org.key}' is missing orgIds['${org.to}'] (to-vault org id)`;
     }
   }
   return null;
@@ -100,9 +144,9 @@ export function loadConfig(path?: string): ConfigLoadResult {
     return { ok: false, error: `Config validation failed:\n${issues}` };
   }
 
-  const orgError = validateOrgs(result.data);
-  if (orgError) {
-    return { ok: false, error: orgError };
+  const targetError = validateTargets(result.data);
+  if (targetError) {
+    return { ok: false, error: targetError };
   }
 
   // Override from env if provided
@@ -136,6 +180,34 @@ export function buildAccountGroups(
   for (const acct of groupOrder) {
     ordered.set(acct, groups.get(acct)!);
   }
+  return ordered;
+}
+
+/**
+ * Sub-groups one account's targets (its personal-vault target plus any orgs it
+ * owns, as already produced by buildAccountGroups) by the vault each target
+ * uses for the given role, so the runner logs in once per distinct vault
+ * instead of once per target.
+ */
+export function groupTargetsByVault(
+  targets: string[],
+  config: Config,
+  role: 'from' | 'to',
+): Map<string, string[]> {
+  const groups = new Map<string, string[]>();
+  const order: string[] = [];
+  for (const t of targets) {
+    const cfg = config.orgs.find((o) => o.key === t) ?? config.users.find((u) => u.key === t);
+    if (!cfg) continue; // unreachable post-validation
+    const vaultKey = cfg[role];
+    if (!groups.has(vaultKey)) {
+      groups.set(vaultKey, []);
+      order.push(vaultKey);
+    }
+    groups.get(vaultKey)!.push(t);
+  }
+  const ordered = new Map<string, string[]>();
+  for (const k of order) ordered.set(k, groups.get(k)!);
   return ordered;
 }
 

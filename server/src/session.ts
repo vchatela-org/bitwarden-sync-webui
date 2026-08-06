@@ -1,8 +1,6 @@
 import { runBw, isValidSessionKey, BwResult, LogCallback } from './bwCli.js';
-import { getPassword, forgetPassword, cachePassword, passwordKey } from './secrets.js';
+import { getPassword, forgetPassword } from './secrets.js';
 import { registerSecret } from './redact.js';
-
-export type ProfileSide = 'cloud' | 'home';
 
 /** Server the bw CLI uses when a profile has no explicit `config server`. */
 export const DEFAULT_BW_SERVER = 'https://vault.bitwarden.com';
@@ -56,7 +54,8 @@ export async function getBwStatus(profileDir: string, log?: LogCallback): Promis
  * Returns { ok: false, reason: 'max-attempts' } after 3 failures.
  */
 export async function bwInit(opts: {
-  profileKey: string; // e.g. 'val', 'home-val'
+  accountKey: string; // password-cache key — opaque, never string-surgered
+  profileLabel: string; // e.g. 'alice:eu' — bw CLI profile-dir naming / log messages only
   email: string;
   wantServer: string;
   profileDir: string;
@@ -64,14 +63,13 @@ export async function bwInit(opts: {
   otpMethod?: number;
   log?: LogCallback;
 }): Promise<InitResult> {
-  const { profileKey, email, wantServer, profileDir, log } = opts;
-  const pwKey = passwordKey(profileKey);
+  const { accountKey, profileLabel, email, wantServer, profileDir, log } = opts;
   const MAX_ATTEMPTS = 3;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const pw = getPassword(pwKey);
+    const pw = getPassword(accountKey);
     if (!pw) {
-      return { ok: false, reason: 'needs-password', message: `Password required for ${pwKey}` };
+      return { ok: false, reason: 'needs-password', message: `Password required for ${accountKey}` };
     }
 
     // 1. Read status + server.
@@ -86,7 +84,7 @@ export async function bwInit(opts: {
 
     // 2. Server mismatch → logout first, then reconfigure
     if (currentServer !== wantServerNorm) {
-      log?.('app' as never, `[${profileKey}] Server is '${configuredServer || `unset (default ${DEFAULT_BW_SERVER})`}' → switching to '${wantServerNorm}'`);
+      log?.('app' as never, `[${profileLabel}] Server is '${configuredServer || `unset (default ${DEFAULT_BW_SERVER})`}' → switching to '${wantServerNorm}'`);
       if (currentStatus !== 'unauthenticated') {
         await runBw(['logout'], { profileDir, timeout: 10000 }, log);
       }
@@ -97,7 +95,7 @@ export async function bwInit(opts: {
       currentStatus = 'unauthenticated';
     }
 
-    log?.('app' as never, `[${profileKey}] Status: ${currentStatus}`);
+    log?.('app' as never, `[${profileLabel}] Status: ${currentStatus}`);
 
     // 3. Login or unlock
     let sessionKey = '';
@@ -136,16 +134,16 @@ export async function bwInit(opts: {
     }
 
     if (needsOtp && !opts.otp) {
-      return { ok: false, reason: 'needs-otp', message: `OTP required for ${profileKey}` };
+      return { ok: false, reason: 'needs-otp', message: `OTP required for ${profileLabel}` };
     }
 
     if (loginFailed || !sessionKey) {
-      log?.('app' as never, `[${profileKey}] Login/unlock failed (attempt ${attempt}/${MAX_ATTEMPTS})`);
-      forgetPassword(pwKey);
+      log?.('app' as never, `[${profileLabel}] Login/unlock failed (attempt ${attempt}/${MAX_ATTEMPTS})`);
+      forgetPassword(accountKey);
       if (attempt >= MAX_ATTEMPTS) {
         return { ok: false, reason: 'max-attempts', message: `Failed after ${MAX_ATTEMPTS} attempts` };
       }
-      return { ok: false, reason: 'needs-password', message: `Wrong password or OTP for ${pwKey} (attempt ${attempt})` };
+      return { ok: false, reason: 'needs-password', message: `Wrong password or OTP for ${accountKey} (attempt ${attempt})` };
     }
 
     // Register the session key for exact-match redaction (belt-and-suspenders alongside
@@ -158,12 +156,12 @@ export async function bwInit(opts: {
     if (syncResult.exitCode !== 0) {
       const out = syncResult.stdout + syncResult.stderr;
       if (/invalid_grant|unauthorized|401/i.test(out)) {
-        log?.('app' as never, `[${profileKey}] Sync rejected (invalid_grant/auth). Logging out for fresh login.`);
+        log?.('app' as never, `[${profileLabel}] Sync rejected (invalid_grant/auth). Logging out for fresh login.`);
         await runBw(['logout'], { profileDir, timeout: 10000 }, log);
         // Keep password — login proved it correct; next attempt will do fresh login
         continue;
       }
-      log?.('app' as never, `[${profileKey}] Sync failed (attempt ${attempt}/${MAX_ATTEMPTS}): ${out.slice(0, 200)}`);
+      log?.('app' as never, `[${profileLabel}] Sync failed (attempt ${attempt}/${MAX_ATTEMPTS}): ${out.slice(0, 200)}`);
       if (attempt >= MAX_ATTEMPTS) {
         return { ok: false, reason: 'failed', message: `Sync failed: ${out.slice(0, 200)}` };
       }

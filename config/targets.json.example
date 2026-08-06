@@ -1,8 +1,11 @@
 {
   "_comment": "Rename this file to targets.json and fill in your real values.",
 
-  "cloudServerUrl": "https://vault.bitwarden.com",
-  "homeServerUrl": "https://bitwarden.example.internal",
+  "vaults": [
+    { "key": "eu", "name": "Bitwarden EU", "serverUrl": "https://vault.bitwarden.eu" },
+    { "key": "com", "name": "Bitwarden US", "serverUrl": "https://vault.bitwarden.com" },
+    { "key": "selfhosted", "name": "Self-hosted", "serverUrl": "https://bitwarden.example.internal" }
+  ],
 
   "backupFolder": "/backups",
   "bitwardenConfigDir": "/data",
@@ -11,11 +14,15 @@
     {
       "key": "alice",
       "email": "alice@example.com",
-      "displayName": "Alice"
+      "displayName": "Alice",
+      "from": "eu",
+      "to": "com"
     },
     {
       "key": "bob",
-      "email": "bob@example.com"
+      "email": "bob@example.com",
+      "from": "com",
+      "to": "selfhosted"
     }
   ],
 
@@ -23,9 +30,13 @@
     {
       "key": "acme",
       "name": "Acme Corp",
-      "owner": "alice",
-      "saasId": "00000000-0000-0000-0000-000000000001",
-      "homeId": "00000000-0000-0000-0000-000000000002"
+      "owner": "bob",
+      "from": "com",
+      "to": "selfhosted",
+      "orgIds": {
+        "com": "00000000-0000-0000-0000-000000000001",
+        "selfhosted": "00000000-0000-0000-0000-000000000002"
+      }
     }
   ],
 

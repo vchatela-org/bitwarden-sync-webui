@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { KeyRound, Cloud, HardDrive, AlertCircle } from 'lucide-react';
+import { KeyRound, Server, AlertCircle } from 'lucide-react';
 import { CredentialPrompt } from '../types.js';
 import { submitCredentials, cancelJob } from '../api.js';
 import { Modal } from './ui/Modal.js';
 import { Button } from './ui/Button.js';
 import { Input, Select, Field, Alert } from './ui/Input.js';
+import { CheckboxField } from './ui/Checkbox.js';
 import { maskValue } from '../lib/mask.js';
 
 interface Props {
@@ -25,11 +26,10 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [otpMethod, setOtpMethod] = useState(prompt.otpMethod ?? 0);
+  const [shared, setShared] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
-
-  const isCloud = prompt.side === 'cloud';
 
   async function handleCancel() {
     setError('');
@@ -54,6 +54,7 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
         password,
         prompt.needsOtp ? otp : undefined,
         prompt.needsOtp ? otpMethod : undefined,
+        shared,
       );
       onSubmitted();
     } catch (err: unknown) {
@@ -84,12 +85,8 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
           <strong className="font-medium text-fg">{masked ? maskValue(prompt.accountKey) : prompt.accountKey}</strong>
           on
           <span className="inline-flex items-center gap-1 rounded-md border border-line bg-elevated px-1.5 py-px text-[11px] text-fg-muted">
-            {isCloud ? (
-              <Cloud className="size-3 text-info" />
-            ) : (
-              <HardDrive className="size-3 text-violet" />
-            )}
-            {isCloud ? 'cloud' : 'home server'}
+            <Server className="size-3 text-fg-muted" />
+            {prompt.vaultName}
           </span>
           {prompt.targets && prompt.targets.length > 0 && (
             <span className="w-full text-[11px] text-fg-faint">
@@ -132,6 +129,12 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
             autoComplete="off"
           />
         </Field>
+
+        <CheckboxField
+          checked={shared}
+          onCheckedChange={setShared}
+          label={`Use this password for ${masked ? maskValue(prompt.accountKey) : prompt.accountKey}'s other vaults too`}
+        />
 
         {prompt.needsOtp && (
           <>

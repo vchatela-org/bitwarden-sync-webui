@@ -38,7 +38,8 @@ export interface CredentialPrompt {
   kind: 'credentials';
   accountKey: string;
   targets: string[];
-  side: 'cloud' | 'home';
+  vaultKey: string;
+  vaultName: string;
   needsOtp: boolean;
   otpMethod?: number;
 }
@@ -63,24 +64,33 @@ export interface Job {
   steps: Step[];
   logs: LogLine[];
   prompt?: Prompt;
-  results?: Record<string, { cloud?: number; home?: number }>;
+  results?: Record<string, { source?: number; dest?: number }>;
+}
+
+export interface VaultConfig {
+  key: string;
+  name: string;
+  serverUrl: string;
 }
 
 export interface UserConfig {
   key: string;
   email: string;
   displayName?: string;
+  from: string;
+  to: string;
 }
 
 export interface OrgConfig {
   key: string;
   name: string;
   owner: string;
+  from: string;
+  to: string;
 }
 
 export interface AppConfig {
-  cloudServerUrl: string;
-  homeServerUrl: string;
+  vaults: VaultConfig[];
   users: UserConfig[];
   orgs: OrgConfig[];
   retention: { keepDaily: number; keepMonthly: number };
@@ -159,6 +169,6 @@ export type VaultStatus = {
 } | null;
 
 export interface TargetStatus {
-  cloud: VaultStatus;
-  home: VaultStatus;
+  source: VaultStatus;
+  dest: VaultStatus;
 }

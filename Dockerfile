@@ -60,7 +60,7 @@ COPY --from=web-builder /app/server/dist/public ./dist/public
 # Create runtime directories that will be mount-points in the pod
 # The actual data lives on PVCs; we just create the mount points.
 RUN mkdir -p /backups /data /config /run/bw-fifo /tmp \
- && chown -R ${UID}:${UID} /app /run/bw-fifo /tmp
+ && chown -R ${UID}:${UID} /app /backups /data /config /run/bw-fifo /tmp
 
 COPY entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh

@@ -1,9 +1,9 @@
 import { randomUUID } from 'crypto';
 import { mkdirSync, writeFileSync, readFileSync, readdirSync, unlinkSync } from 'fs';
 import { join } from 'path';
-import { Config, buildAccountGroups, cloudProfileDir, homeProfileDir } from './config.js';
+import { Config, buildAccountGroups, groupTargetsByVault, profileDir, vaultByKey } from './config.js';
 import { bwInit, getBwStatus, lockProfile, logoutProfile, listItems, listOrgCollections, InitResult } from './session.js';
-import { cachePassword, getPassword, clearAllPasswords, passwordKey } from './secrets.js';
+import { cachePassword, getPassword, clearAllPasswords } from './secrets.js';
 import { purgeVault } from './purge.js';
 import { dedupeOrgCollections } from './collections.js';
 import { computeDiff, evaluateGuard, DiffResult } from './diff.js';
@@ -43,7 +43,8 @@ export interface CredentialPrompt {
   kind: 'credentials';
   accountKey: string;
   targets: string[];
-  side: 'cloud' | 'home';
+  vaultKey: string;
+  vaultName: string;
   needsOtp: boolean;
   otpMethod?: number;
 }
@@ -68,7 +69,7 @@ export interface Job {
   steps: Step[];
   logs: LogLine[];
   prompt?: Prompt;
-  results?: Record<string, { cloud?: number; home?: number }>;
+  results?: Record<string, { source?: number; dest?: number }>;
 }
 
 export interface JobOptions {
@@ -244,49 +245,55 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
   for (const [account, groupTargets] of groups) {
     const g = account;
     if (doBackup) {
-      steps.push({ id: `${g}:cloud:login`, label: `[${g}] Cloud login`, state: 'pending', group: g });
-      steps.push({ id: `${g}:cloud:sync`, label: `[${g}] Cloud sync`, state: 'pending', group: g });
-      for (const t of groupTargets) {
-        steps.push({ id: `${g}:export:${t}:encrypted`, label: `[${t}] Export encrypted`, state: 'pending', group: g });
-        steps.push({ id: `${g}:export:${t}:pass`, label: `[${t}] Export password-protected`, state: 'pending', group: g });
-        steps.push({ id: `${g}:export:${t}:meta`, label: `[${t}] Write sidecar metadata`, state: 'pending', group: g });
+      const byFrom = groupTargetsByVault(groupTargets, config, 'from');
+      for (const [v, vTargets] of byFrom) {
+        const vaultName = vaultByKey(config, v).name;
+        steps.push({ id: `${g}:backup:${v}:login`, label: `[${g}] ${vaultName} login`, state: 'pending', group: g });
+        steps.push({ id: `${g}:backup:${v}:sync`, label: `[${g}] ${vaultName} sync`, state: 'pending', group: g });
+        for (const t of vTargets) {
+          steps.push({ id: `${g}:export:${t}:encrypted`, label: `[${t}] Export encrypted`, state: 'pending', group: g });
+          steps.push({ id: `${g}:export:${t}:pass`, label: `[${t}] Export password-protected`, state: 'pending', group: g });
+          steps.push({ id: `${g}:export:${t}:meta`, label: `[${t}] Write sidecar metadata`, state: 'pending', group: g });
+        }
+        steps.push({ id: `${g}:backup:${v}:lock`, label: `[${g}] ${vaultName} lock`, state: 'pending', group: g });
       }
-      steps.push({ id: `${g}:cloud:lock`, label: `[${g}] Cloud lock`, state: 'pending', group: g });
     }
     if (doImport) {
-      steps.push({ id: `${g}:home:resolve`, label: `[${g}] DNS resolve home server`, state: 'pending', group: g });
-      steps.push({ id: `${g}:home:login`, label: `[${g}] Home login`, state: 'pending', group: g });
-      steps.push({ id: `${g}:home:sync`, label: `[${g}] Home sync`, state: 'pending', group: g });
-      for (const t of groupTargets) {
-        steps.push({ id: `${g}:import:${t}:resolveFile`, label: `[${t}] Resolve backup file`, state: 'pending', group: g });
-        steps.push({ id: `${g}:import:${t}:diff`, label: `[${t}] Pre-import diff`, state: 'pending', group: g });
-        steps.push({ id: `${g}:import:${t}:purge`, label: `[${t}] Purge home vault`, state: 'pending', group: g });
-        steps.push({ id: `${g}:import:${t}:run`, label: `[${t}] Import`, state: 'pending', group: g });
-        steps.push({ id: `${g}:import:${t}:verify`, label: `[${t}] Verify import`, state: 'pending', group: g });
-        const org = config.orgs.find((o) => o.key === t);
-        if (org) {
-          steps.push({ id: `${g}:import:${t}:dedupe`, label: `[${t}] Dedupe org collections`, state: 'pending', group: g });
+      const byTo = groupTargetsByVault(groupTargets, config, 'to');
+      for (const [v, vTargets] of byTo) {
+        const vaultName = vaultByKey(config, v).name;
+        steps.push({ id: `${g}:import:${v}:login`, label: `[${g}] ${vaultName} login`, state: 'pending', group: g });
+        steps.push({ id: `${g}:import:${v}:sync`, label: `[${g}] ${vaultName} sync`, state: 'pending', group: g });
+        for (const t of vTargets) {
+          steps.push({ id: `${g}:import:${t}:resolveFile`, label: `[${t}] Resolve backup file`, state: 'pending', group: g });
+          steps.push({ id: `${g}:import:${t}:diff`, label: `[${t}] Pre-import diff`, state: 'pending', group: g });
+          steps.push({ id: `${g}:import:${t}:purge`, label: `[${t}] Purge destination vault`, state: 'pending', group: g });
+          steps.push({ id: `${g}:import:${t}:run`, label: `[${t}] Import`, state: 'pending', group: g });
+          steps.push({ id: `${g}:import:${t}:verify`, label: `[${t}] Verify import`, state: 'pending', group: g });
+          const org = config.orgs.find((o) => o.key === t);
+          if (org) {
+            steps.push({ id: `${g}:import:${t}:dedupe`, label: `[${t}] Dedupe org collections`, state: 'pending', group: g });
+          }
         }
-      }
-      steps.push({ id: `${g}:home:lock`, label: `[${g}] Home lock`, state: 'pending', group: g });
-      if (config.homeLogoutAfterImport) {
-        steps.push({ id: `${g}:home:logout`, label: `[${g}] Home logout`, state: 'pending', group: g });
+        steps.push({ id: `${g}:import:${v}:lock`, label: `[${g}] ${vaultName} lock`, state: 'pending', group: g });
+        if (config.homeLogoutAfterImport) {
+          steps.push({ id: `${g}:import:${v}:logout`, label: `[${g}] ${vaultName} logout`, state: 'pending', group: g });
+        }
       }
     }
     if (doCount) {
-      steps.push({ id: `${g}:count:cloud:login`, label: `[${g}] Cloud login`, state: 'pending', group: g });
-      steps.push({ id: `${g}:count:cloud:sync`, label: `[${g}] Cloud sync`, state: 'pending', group: g });
-      for (const t of groupTargets) {
-        steps.push({ id: `${g}:count:cloud:${t}`, label: `[${t}] Count cloud items`, state: 'pending', group: g });
+      for (const role of ['source', 'dest'] as const) {
+        const byRole = groupTargetsByVault(groupTargets, config, role === 'source' ? 'from' : 'to');
+        for (const [v, vTargets] of byRole) {
+          const vaultName = vaultByKey(config, v).name;
+          steps.push({ id: `${g}:count:${role}:${v}:login`, label: `[${g}] ${vaultName} login`, state: 'pending', group: g });
+          steps.push({ id: `${g}:count:${role}:${v}:sync`, label: `[${g}] ${vaultName} sync`, state: 'pending', group: g });
+          for (const t of vTargets) {
+            steps.push({ id: `${g}:count:${role}:${v}:${t}`, label: `[${t}] Count ${role} items`, state: 'pending', group: g });
+          }
+          steps.push({ id: `${g}:count:${role}:${v}:lock`, label: `[${g}] ${vaultName} lock`, state: 'pending', group: g });
+        }
       }
-      steps.push({ id: `${g}:count:cloud:lock`, label: `[${g}] Cloud lock`, state: 'pending', group: g });
-
-      steps.push({ id: `${g}:count:home:login`, label: `[${g}] Home login`, state: 'pending', group: g });
-      steps.push({ id: `${g}:count:home:sync`, label: `[${g}] Home sync`, state: 'pending', group: g });
-      for (const t of groupTargets) {
-        steps.push({ id: `${g}:count:home:${t}`, label: `[${t}] Count home items`, state: 'pending', group: g });
-      }
-      steps.push({ id: `${g}:count:home:lock`, label: `[${g}] Home lock`, state: 'pending', group: g });
     }
   }
   return steps;
@@ -296,6 +303,22 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
 const credentialResolvers = new Map<string, (pw: string, otp?: string, otpMethod?: number) => void>();
 const confirmationResolvers = new Map<string, (decision: 'proceed' | 'skip' | 'abort') => void>();
 
+function accountVaultKey(account: string, vaultKey: string): string {
+  return `${account}::${vaultKey}`;
+}
+
+/**
+ * Prefers a password cached specifically for this (account, vault); falls back to one shared
+ * across the account's vaults (opt-in at submission time — see submitCredentials). Returns the
+ * key to look up / write / forget next.
+ */
+function resolvePasswordCacheKey(account: string, vaultKey: string): string {
+  const specific = accountVaultKey(account, vaultKey);
+  if (getPassword(specific) !== undefined) return specific;
+  if (getPassword(account) !== undefined) return account;
+  return specific;
+}
+
 function clearPrompt(job: Job): void {
   if (!job.prompt) return;
   job.prompt = undefined;
@@ -303,11 +326,20 @@ function clearPrompt(job: Job): void {
   persistJob(job);
 }
 
-export function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number): boolean {
+export function submitCredentials(
+  jobId: string,
+  accountKey: string,
+  password: string,
+  otp?: string,
+  otpMethod?: number,
+  sharedAcrossVaults = false,
+): boolean {
   const resolver = credentialResolvers.get(`${jobId}:${accountKey}`);
   if (typeof resolver !== 'function') return false;
-  cachePassword(accountKey, password);
   const job = jobs.get(jobId);
+  const vaultKey = job?.prompt?.kind === 'credentials' ? job.prompt.vaultKey : undefined;
+  const cacheKey = sharedAcrossVaults || !vaultKey ? accountKey : accountVaultKey(accountKey, vaultKey);
+  cachePassword(cacheKey, password);
   if (job) clearPrompt(job);
   resolver(password, otp, otpMethod);
   return true;
@@ -365,7 +397,7 @@ export function deleteJobs(ids: string[]): DeleteJobsResult {
   return { deleted, skipped };
 }
 
-async function waitForCredentials(job: Job, accountKey: string, targets: string[], side: 'cloud' | 'home', needsOtp: boolean): Promise<{ password: string; otp?: string; otpMethod?: number }> {
+async function waitForCredentials(job: Job, accountKey: string, targets: string[], vaultKey: string, vaultName: string, needsOtp: boolean): Promise<{ password: string; otp?: string; otpMethod?: number }> {
   return new Promise((resolve, reject) => {
     const timeout = setTimeout(() => {
       credentialResolvers.delete(`${job.id}:${accountKey}`);
@@ -380,7 +412,7 @@ async function waitForCredentials(job: Job, accountKey: string, targets: string[
       else resolve({ password: pw, otp, otpMethod });
     });
 
-    const prompt: CredentialPrompt = { kind: 'credentials', accountKey, targets, side, needsOtp };
+    const prompt: CredentialPrompt = { kind: 'credentials', accountKey, targets, vaultKey, vaultName, needsOtp };
     job.prompt = prompt;
     emit(job.id, 'prompt', prompt);
   });
@@ -398,16 +430,20 @@ async function loginWithRetry(opts: {
   job: Job;
   account: string;
   groupTargets: string[];
-  side: 'cloud' | 'home';
-  profileKey: string;
+  vaultKey: string;
+  vaultName: string;
   email: string;
   wantServer: string;
   profileDir: string;
   stepId: string;
   log: LogCallback;
 }): Promise<InitResult> {
-  const { job, account, groupTargets, side, profileKey, email, wantServer, profileDir, stepId, log } = opts;
-  let result = await bwInit({ profileKey, email, wantServer, profileDir, log });
+  const { job, account, groupTargets, vaultKey, vaultName, email, wantServer, profileDir, stepId, log } = opts;
+  const profileLabel = `${account}:${vaultKey}`;
+  let result = await bwInit({
+    accountKey: resolvePasswordCacheKey(account, vaultKey),
+    profileLabel, email, wantServer, profileDir, log,
+  });
 
   // Each iteration here is one credential prompt shown to the user, so this caps the
   // number of prompts (not "wrong password" retries) at MAX_CREDENTIAL_ATTEMPTS.
@@ -419,8 +455,13 @@ async function loginWithRetry(opts: {
     if ((job.state as string) === 'aborted') throw new Error('Job aborted or cancelled');
     updateJobState(job, 'awaiting-credentials');
     updateStep(job, stepId, { state: 'awaiting-input' });
-    const creds = await waitForCredentials(job, account, groupTargets, side, result.reason === 'needs-otp');
-    result = await bwInit({ profileKey, email, wantServer, profileDir, otp: creds.otp, otpMethod: creds.otpMethod, log });
+    const creds = await waitForCredentials(job, account, groupTargets, vaultKey, vaultName, result.reason === 'needs-otp');
+    // Re-resolve: the prompt may just have cached the password under either the vault-specific
+    // or the shared key, depending on the user's "use for other vaults too" choice.
+    result = await bwInit({
+      accountKey: resolvePasswordCacheKey(account, vaultKey),
+      profileLabel, email, wantServer, profileDir, otp: creds.otp, otpMethod: creds.otpMethod, log,
+    });
     updateJobState(job, 'running');
     updateStep(job, stepId, { state: 'running' });
   }
@@ -483,363 +524,361 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
       const email = userCfg.email;
       addLog(job, 'app', `\n====== Account ${account} (${email}) — targets: ${groupTargets.join(', ')} ======`);
 
+      const ts = new Date().toISOString().replace(/[-T:]/g, '').slice(0, 15).replace(/(\d{8})(\d{6})/, '$1_$2');
+
       // ─── BACKUP PHASE ──────────────────────────────────────────────────────
       if (doBackup) {
-        let cloudSession: string | null = null;
-
-        // Cloud login
-        const cloudLoginStepId = `${account}:cloud:login`;
-        updateStep(job, cloudLoginStepId, { state: 'running' });
-        updateJobState(job, 'running');
-
-        const cloudDir = cloudProfileDir(config.bitwardenConfigDir, account);
-        let initResult: InitResult;
-        try {
-          initResult = await loginWithRetry({
-            job, account, groupTargets, side: 'cloud',
-            profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: cloudDir,
-            stepId: cloudLoginStepId, log,
-          });
-        } catch (err: unknown) {
-          updateStep(job, cloudLoginStepId, { state: 'failed', detail: String(err) });
-          for (const t of groupTargets) { backupFailed.add(t); }
-          anyFailed = true;
-          continue;
-        }
-
-        if (!initResult.ok) {
-          for (const t of groupTargets) { backupFailed.add(t); }
-          anyFailed = true;
-          continue;
-        }
-        cloudSession = initResult.sessionKey;
-
-        // Cloud sync step (already done in bwInit, just mark complete)
-        const cloudSyncId = `${account}:cloud:sync`;
-        updateStep(job, cloudSyncId, { state: 'succeeded' });
-
-        const ts = new Date().toISOString().replace(/[-T:]/g, '').slice(0, 15).replace(/(\d{8})(\d{6})/, '$1_$2');
-
-        // Export each target
-        for (const target of groupTargets) {
+        const byFrom = groupTargetsByVault(groupTargets, config, 'from');
+        for (const [v, vTargets] of byFrom) {
           if ((job.state as string) === 'aborted') break;
-          const org = config.orgs.find((o) => o.key === target);
-          const isOrg = !!org;
-          const ownerKey = isOrg ? org!.owner : target;
-          const pw = getPassword(passwordKey(ownerKey));
-          if (!pw) {
-            addLog(job, 'app', `⚠️ No password cached for ${ownerKey}, skipping export of ${target}`);
-            backupFailed.add(target);
-            for (const stepSuffix of ['encrypted', 'pass', 'meta']) {
-              updateStep(job, `${account}:export:${target}:${stepSuffix}`, { state: 'skipped', detail: 'No password' });
-            }
-            continue;
-          }
+          const vault = vaultByKey(config, v);
 
-          const encStepId = `${account}:export:${target}:encrypted`;
-          const passStepId = `${account}:export:${target}:pass`;
-          const metaStepId = `${account}:export:${target}:meta`;
-          updateStep(job, encStepId, { state: 'running' });
+          const loginStepId = `${account}:backup:${v}:login`;
+          updateStep(job, loginStepId, { state: 'running' });
+          updateJobState(job, 'running');
 
-          const encFilename = buildBackupFilename(target, isOrg ? 'org' : 'user', ts, 'encrypted');
-          const encPath = `${config.backupFolder}/${encFilename}`;
-          const encArgs = ['export', '--output', encPath, '--format', 'encrypted_json', '--session', cloudSession];
-          if (isOrg) encArgs.push('--organizationid', org!.saasId);
-          const encResult = await runBw(encArgs, { profileDir: cloudDir, timeout: 60000 }, log);
-          if (encResult.exitCode !== 0) {
-            updateStep(job, encStepId, { state: 'failed', detail: 'Export failed' });
-            backupFailed.add(target);
-            updateStep(job, passStepId, { state: 'skipped', detail: 'Encrypted export failed' });
-            updateStep(job, metaStepId, { state: 'skipped', detail: 'Encrypted export failed' });
-            anyFailed = true;
-            continue;
-          }
-          updateStep(job, encStepId, { state: 'succeeded' });
-          updateStep(job, passStepId, { state: 'running' });
-
-          const passFilename = buildBackupFilename(target, isOrg ? 'org' : 'user', ts, 'encrypted_pass');
-          const passPath = `${config.backupFolder}/${passFilename}`;
-          const passArgs = ['export', '--output', passPath, '--format', 'encrypted_json', '--session', cloudSession, '--password'];
-          if (isOrg) passArgs.push('--organizationid', org!.saasId);
-          const passResult = await runBw(passArgs, { profileDir: cloudDir, stdin: pw, timeout: 60000 }, log);
-          if (passResult.exitCode !== 0) {
-            updateStep(job, passStepId, { state: 'failed', detail: 'Password-protected export failed' });
-            backupFailed.add(target);
-            updateStep(job, metaStepId, { state: 'skipped', detail: 'Password export failed' });
-            anyFailed = true;
-            continue;
-          }
-          backupFiles.set(target, passPath);
-          updateStep(job, passStepId, { state: 'succeeded' });
-          updateStep(job, metaStepId, { state: 'running' });
-
-          // Write sidecar metadata
+          const vaultDir = profileDir(config.bitwardenConfigDir, account, v);
+          let initResult: InitResult;
           try {
-            const itemsForMeta = await listItems(cloudDir, cloudSession, { organizationId: isOrg ? org!.saasId : undefined }, log);
-            const filteredMeta = isOrg
-              ? (itemsForMeta as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.saasId)
-              : (itemsForMeta as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
-            const passContent = readFileSync(passPath);
-            const sha256 = createHash('sha256').update(passContent).digest('hex');
-            const sizeStat = statSync(passPath);
-            const meta: BackupMeta = {
-              target,
-              kind: isOrg ? 'org' : 'user',
-              timestamp: ts,
-              itemCount: filteredMeta.length,
-              folderCount: isOrg ? undefined : (await runBw(['list', 'folders', '--session', cloudSession], { profileDir: cloudDir, timeout: 30000, silenceStdout: true }, log).then((r) => { try { return (JSON.parse(r.stdout) as unknown[]).length; } catch { return 0; } })),
-              collectionCount: isOrg ? filteredMeta.filter((i) => i['collectionIds']).length : null,
-              sourceServer: config.cloudServerUrl,
-              cliVersion: cliVer,
-              exportFile: passFilename,
-              sizeBytes: sizeStat.size,
-              sha256,
-            };
-            const metaFilename = buildBackupFilename(target, isOrg ? 'org' : 'user', ts, 'meta');
-            writeFileSync(`${config.backupFolder}/${metaFilename}`, JSON.stringify(meta, null, 2));
-            updateStep(job, metaStepId, { state: 'succeeded' });
+            initResult = await loginWithRetry({
+              job, account, groupTargets: vTargets, vaultKey: v, vaultName: vault.name,
+              email, wantServer: vault.serverUrl, profileDir: vaultDir,
+              stepId: loginStepId, log,
+            });
           } catch (err: unknown) {
-            addLog(job, 'app', `⚠️ Failed to write metadata for ${target}: ${err}`);
-            updateStep(job, metaStepId, { state: 'warning', detail: String(err) });
+            updateStep(job, loginStepId, { state: 'failed', detail: String(err) });
+            for (const t of vTargets) { backupFailed.add(t); }
+            anyFailed = true;
+            continue;
           }
-        }
 
-        // Lock cloud profile
-        const cloudLockId = `${account}:cloud:lock`;
-        updateStep(job, cloudLockId, { state: 'running' });
-        await lockProfile(cloudDir, log);
-        updateStep(job, cloudLockId, { state: 'succeeded' });
-        cloudSession = null;
+          if (!initResult.ok) {
+            for (const t of vTargets) { backupFailed.add(t); }
+            anyFailed = true;
+            continue;
+          }
+          const session = initResult.sessionKey;
+
+          // Sync step (already done in bwInit, just mark complete)
+          updateStep(job, `${account}:backup:${v}:sync`, { state: 'succeeded' });
+
+          // Export each target
+          for (const target of vTargets) {
+            if ((job.state as string) === 'aborted') break;
+            const org = config.orgs.find((o) => o.key === target);
+            const isOrg = !!org;
+            const ownerKey = isOrg ? org!.owner : target;
+            const pw = getPassword(resolvePasswordCacheKey(ownerKey, v));
+            if (!pw) {
+              addLog(job, 'app', `⚠️ No password cached for ${ownerKey}, skipping export of ${target}`);
+              backupFailed.add(target);
+              for (const stepSuffix of ['encrypted', 'pass', 'meta']) {
+                updateStep(job, `${account}:export:${target}:${stepSuffix}`, { state: 'skipped', detail: 'No password' });
+              }
+              continue;
+            }
+
+            const encStepId = `${account}:export:${target}:encrypted`;
+            const passStepId = `${account}:export:${target}:pass`;
+            const metaStepId = `${account}:export:${target}:meta`;
+            updateStep(job, encStepId, { state: 'running' });
+
+            const encFilename = buildBackupFilename(target, isOrg ? 'org' : 'user', ts, 'encrypted');
+            const encPath = `${config.backupFolder}/${encFilename}`;
+            const encArgs = ['export', '--output', encPath, '--format', 'encrypted_json', '--session', session];
+            if (isOrg) encArgs.push('--organizationid', org!.orgIds[v]);
+            const encResult = await runBw(encArgs, { profileDir: vaultDir, timeout: 60000 }, log);
+            if (encResult.exitCode !== 0) {
+              updateStep(job, encStepId, { state: 'failed', detail: 'Export failed' });
+              backupFailed.add(target);
+              updateStep(job, passStepId, { state: 'skipped', detail: 'Encrypted export failed' });
+              updateStep(job, metaStepId, { state: 'skipped', detail: 'Encrypted export failed' });
+              anyFailed = true;
+              continue;
+            }
+            updateStep(job, encStepId, { state: 'succeeded' });
+            updateStep(job, passStepId, { state: 'running' });
+
+            const passFilename = buildBackupFilename(target, isOrg ? 'org' : 'user', ts, 'encrypted_pass');
+            const passPath = `${config.backupFolder}/${passFilename}`;
+            const passArgs = ['export', '--output', passPath, '--format', 'encrypted_json', '--session', session, '--password'];
+            if (isOrg) passArgs.push('--organizationid', org!.orgIds[v]);
+            const passResult = await runBw(passArgs, { profileDir: vaultDir, stdin: pw, timeout: 60000 }, log);
+            if (passResult.exitCode !== 0) {
+              updateStep(job, passStepId, { state: 'failed', detail: 'Password-protected export failed' });
+              backupFailed.add(target);
+              updateStep(job, metaStepId, { state: 'skipped', detail: 'Password export failed' });
+              anyFailed = true;
+              continue;
+            }
+            backupFiles.set(target, passPath);
+            updateStep(job, passStepId, { state: 'succeeded' });
+            updateStep(job, metaStepId, { state: 'running' });
+
+            // Write sidecar metadata
+            try {
+              const itemsForMeta = await listItems(vaultDir, session, { organizationId: isOrg ? org!.orgIds[v] : undefined }, log);
+              const filteredMeta = isOrg
+                ? (itemsForMeta as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.orgIds[v])
+                : (itemsForMeta as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
+              const passContent = readFileSync(passPath);
+              const sha256 = createHash('sha256').update(passContent).digest('hex');
+              const sizeStat = statSync(passPath);
+              const meta: BackupMeta = {
+                target,
+                kind: isOrg ? 'org' : 'user',
+                timestamp: ts,
+                itemCount: filteredMeta.length,
+                folderCount: isOrg ? undefined : (await runBw(['list', 'folders', '--session', session], { profileDir: vaultDir, timeout: 30000, silenceStdout: true }, log).then((r) => { try { return (JSON.parse(r.stdout) as unknown[]).length; } catch { return 0; } })),
+                collectionCount: isOrg ? filteredMeta.filter((i) => i['collectionIds']).length : null,
+                sourceServer: vault.serverUrl,
+                cliVersion: cliVer,
+                exportFile: passFilename,
+                sizeBytes: sizeStat.size,
+                sha256,
+              };
+              const metaFilename = buildBackupFilename(target, isOrg ? 'org' : 'user', ts, 'meta');
+              writeFileSync(`${config.backupFolder}/${metaFilename}`, JSON.stringify(meta, null, 2));
+              updateStep(job, metaStepId, { state: 'succeeded' });
+            } catch (err: unknown) {
+              addLog(job, 'app', `⚠️ Failed to write metadata for ${target}: ${err}`);
+              updateStep(job, metaStepId, { state: 'warning', detail: String(err) });
+            }
+          }
+
+          // Lock this vault's profile
+          const lockStepId = `${account}:backup:${v}:lock`;
+          updateStep(job, lockStepId, { state: 'running' });
+          await lockProfile(vaultDir, log);
+          updateStep(job, lockStepId, { state: 'succeeded' });
+        }
       }
 
       // ─── IMPORT PHASE ──────────────────────────────────────────────────────
-      if (doImport && job.state !== 'aborted') {
-        // DNS resolve
-        const homeResolveId = `${account}:home:resolve`;
-        updateStep(job, homeResolveId, { state: 'running' });
-        const homeHost = config.homeServerUrl.replace(/^https?:\/\//, '').split('/')[0].split(':')[0];
-        const dnsResult = await runBw([], { profileDir: '/tmp' }).catch(() => null);
-        // DNS check is non-fatal
-        updateStep(job, homeResolveId, { state: 'succeeded' });
-
-        // Home login
-        const homeLoginId = `${account}:home:login`;
-        updateStep(job, homeLoginId, { state: 'running' });
-
-        const homeDir = homeProfileDir(config.bitwardenConfigDir, account);
-        let homeInitResult: InitResult;
-        try {
-          homeInitResult = await loginWithRetry({
-            job, account, groupTargets, side: 'home',
-            profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: homeDir,
-            stepId: homeLoginId, log,
-          });
-        } catch (err: unknown) {
-          updateStep(job, homeLoginId, { state: 'failed', detail: String(err) });
-          anyFailed = true;
-          continue;
-        }
-
-        if (!homeInitResult.ok) {
-          anyFailed = true;
-          continue;
-        }
-        const homeSession = homeInitResult.sessionKey;
-        updateStep(job, `${account}:home:sync`, { state: 'succeeded' });
-
-        // Import each target
-        for (const target of groupTargets) {
+      if (doImport && (job.state as string) !== 'aborted') {
+        const byTo = groupTargetsByVault(groupTargets, config, 'to');
+        for (const [v, vTargets] of byTo) {
           if ((job.state as string) === 'aborted') break;
-          const org = config.orgs.find((o) => o.key === target);
-          const isOrg = !!org;
-          const ownerKey = isOrg ? org!.owner : target;
-          const pw = getPassword(passwordKey(ownerKey));
+          const vault = vaultByKey(config, v);
 
-          // Skip if backup failed
-          if (backupFailed.has(target) && doBackup) {
-            addLog(job, 'app', `⏭️ Skipping import of ${target}: backup failed this run`);
-            const importSteps = job.steps.filter((s) => s.id.startsWith(`${account}:import:${target}:`));
-            for (const s of importSteps) {
-              updateStep(job, s.id, { state: 'skipped', detail: 'Backup failed' });
-            }
-            continue;
-          }
+          const loginStepId = `${account}:import:${v}:login`;
+          updateStep(job, loginStepId, { state: 'running' });
 
-          const resolveId = `${account}:import:${target}:resolveFile`;
-          updateStep(job, resolveId, { state: 'running' });
-
-          let backupFile = backupFiles.get(target) ?? null;
-          if (!backupFile) {
-            backupFile = findNewestExport(config.backupFolder, target, isOrg ? 'org' : 'user');
-          }
-          if (!backupFile) {
-            addLog(job, 'app', `⚠️ No backup file found for ${target}, skipping`);
-            const importSteps = job.steps.filter((s) => s.id.startsWith(`${account}:import:${target}:`));
-            for (const s of importSteps) {
-              updateStep(job, s.id, { state: 'skipped', detail: 'No backup file' });
-            }
-            anyFailed = true;
-            continue;
-          }
-          updateStep(job, resolveId, { state: 'succeeded', detail: backupFile });
-
-          // Diff
-          const diffId = `${account}:import:${target}:diff`;
-          updateStep(job, diffId, { state: 'running' });
-
-          let diffResult: DiffResult | null = null;
-          let confirmDecision: 'proceed' | 'skip' | 'abort' = 'proceed';
-
+          const vaultDir = profileDir(config.bitwardenConfigDir, account, v);
+          let initResult: InitResult;
           try {
-            diffResult = await computeDiff({
-              homeProfileDir: homeDir,
-              homeSessionKey: homeSession,
-              homeOrgId: isOrg ? org!.homeId : undefined,
-              log,
+            initResult = await loginWithRetry({
+              job, account, groupTargets: vTargets, vaultKey: v, vaultName: vault.name,
+              email, wantServer: vault.serverUrl, profileDir: vaultDir,
+              stepId: loginStepId, log,
             });
-            const guardResult = evaluateGuard(diffResult, config.importGuard);
-
-            if (guardResult.blocked) {
-              addLog(job, 'app', `⚠️ Import guard tripped for ${target}: ${guardResult.reason}`);
-              updateStep(job, diffId, { state: 'warning', detail: guardResult.reason });
-              updateJobState(job, 'awaiting-confirmation');
-
-              try {
-                confirmDecision = await waitForConfirmation(job, target, diffResult);
-              } catch {
-                confirmDecision = 'abort';
-              }
-
-              updateJobState(job, 'running');
-
-              if (confirmDecision === 'abort') {
-                updateJobState(job, 'aborted');
-                break;
-              }
-              if (confirmDecision === 'skip') {
-                addLog(job, 'app', `⏭️ Skipping import of ${target} (user decision)`);
-                const importSteps = job.steps.filter((s) => s.id.startsWith(`${account}:import:${target}:`));
-                for (const s of importSteps) {
-                  if (s.state === 'pending' || s.state === 'running') {
-                    updateStep(job, s.id, { state: 'skipped', detail: 'Skipped by user' });
-                  }
-                }
-                continue;
-              }
-            } else {
-              updateStep(job, diffId, { state: 'succeeded' });
-            }
           } catch (err: unknown) {
-            addLog(job, 'app', `⚠️ Diff failed for ${target}: ${err}`);
-            updateStep(job, diffId, { state: 'warning', detail: String(err) });
-          }
-
-          if ((job.state as string) === 'aborted') break;
-
-          // Purge
-          const purgeId = `${account}:import:${target}:purge`;
-          updateStep(job, purgeId, { state: 'running' });
-
-          if (!pw) {
-            updateStep(job, purgeId, { state: 'failed', detail: 'No password cached' });
+            updateStep(job, loginStepId, { state: 'failed', detail: String(err) });
             anyFailed = true;
             continue;
           }
 
-          try {
-            await purgeVault({
-              who: account,
-              email,
-              homeProfileDir: homeDir,
-              sessionKey: homeSession,
-              homeServerUrl: config.homeServerUrl,
-              homeOrgId: isOrg ? org!.homeId : undefined,
-              password: pw,
-            }, log);
-            updateStep(job, purgeId, { state: 'succeeded' });
-          } catch (err: unknown) {
-            updateStep(job, purgeId, { state: 'failed', detail: String(err) });
-            addLog(job, 'app', `❌ Purge failed for ${target}: ${err}`);
-            const remaining = job.steps.filter((s) =>
-              s.id.startsWith(`${account}:import:${target}:`) && s.state === 'pending',
-            );
-            for (const s of remaining) {
-              updateStep(job, s.id, { state: 'skipped', detail: 'Purge failed' });
+          if (!initResult.ok) {
+            anyFailed = true;
+            continue;
+          }
+          const session = initResult.sessionKey;
+          updateStep(job, `${account}:import:${v}:sync`, { state: 'succeeded' });
+
+          // Import each target
+          for (const target of vTargets) {
+            if ((job.state as string) === 'aborted') break;
+            const org = config.orgs.find((o) => o.key === target);
+            const isOrg = !!org;
+            const ownerKey = isOrg ? org!.owner : target;
+            const pw = getPassword(resolvePasswordCacheKey(ownerKey, v));
+
+            // Skip if backup failed
+            if (backupFailed.has(target) && doBackup) {
+              addLog(job, 'app', `⏭️ Skipping import of ${target}: backup failed this run`);
+              const importSteps = job.steps.filter((s) => s.id.startsWith(`${account}:import:${target}:`));
+              for (const s of importSteps) {
+                updateStep(job, s.id, { state: 'skipped', detail: 'Backup failed' });
+              }
+              continue;
             }
-            anyFailed = true;
-            continue;
-          }
 
-          // Snapshot pre-import collection ids for org
-          let preImportIds: string[] = [];
-          if (isOrg) {
-            const cols = await listOrgCollections(homeDir, homeSession, org!.homeId, log);
-            preImportIds = (cols as Array<{ id: string }>).map((c) => c.id);
-          }
+            const resolveId = `${account}:import:${target}:resolveFile`;
+            updateStep(job, resolveId, { state: 'running' });
 
-          // Import
-          const runId = `${account}:import:${target}:run`;
-          updateStep(job, runId, { state: 'running' });
-          const importArgs = ['import', 'bitwardenjson', backupFile, '--session', homeSession];
-          if (isOrg) importArgs.push('--organizationid', org!.homeId);
-          const importResult = await runBw(importArgs, { profileDir: homeDir, fifoPassword: pw ?? '', timeout: 120000 }, log);
-          if (importResult.exitCode !== 0) {
-            updateStep(job, runId, { state: 'failed', detail: 'Import failed' });
-            anyFailed = true;
-            const remaining = job.steps.filter((s) =>
-              s.id.startsWith(`${account}:import:${target}:`) && s.state === 'pending',
-            );
-            for (const s of remaining) {
-              updateStep(job, s.id, { state: 'skipped', detail: 'Import failed' });
+            let backupFile = backupFiles.get(target) ?? null;
+            if (!backupFile) {
+              backupFile = findNewestExport(config.backupFolder, target, isOrg ? 'org' : 'user');
             }
-            continue;
-          }
-          updateStep(job, runId, { state: 'succeeded' });
+            if (!backupFile) {
+              addLog(job, 'app', `⚠️ No backup file found for ${target}, skipping`);
+              const importSteps = job.steps.filter((s) => s.id.startsWith(`${account}:import:${target}:`));
+              for (const s of importSteps) {
+                updateStep(job, s.id, { state: 'skipped', detail: 'No backup file' });
+              }
+              anyFailed = true;
+              continue;
+            }
+            updateStep(job, resolveId, { state: 'succeeded', detail: backupFile });
 
-          // Verify
-          const verifyId = `${account}:import:${target}:verify`;
-          updateStep(job, verifyId, { state: 'running' });
-          const verifyItems = await listItems(homeDir, homeSession, { organizationId: isOrg ? org!.homeId : undefined }, log);
-          const verifyCount = isOrg
-            ? verifyItems.filter((i) => (i as Record<string, unknown>)['organizationId'] === org!.homeId).length
-            : verifyItems.filter((i) => !(i as Record<string, unknown>)['organizationId']).length;
-          addLog(job, 'app', `📊 Items imported for ${target}: ${verifyCount}`);
-          updateStep(job, verifyId, { state: 'succeeded', detail: `${verifyCount} items` });
+            // Diff
+            const diffId = `${account}:import:${target}:diff`;
+            updateStep(job, diffId, { state: 'running' });
 
-          // Dedupe collections (org only)
-          if (isOrg) {
-            const dedupeId = `${account}:import:${target}:dedupe`;
-            updateStep(job, dedupeId, { state: 'running' });
+            let diffResult: DiffResult | null = null;
+            let confirmDecision: 'proceed' | 'skip' | 'abort' = 'proceed';
+
             try {
-              const dedupeResult = await dedupeOrgCollections({
-                profileDir: homeDir,
-                sessionKey: homeSession,
-                orgId: org!.homeId,
-                preImportIds,
+              diffResult = await computeDiff({
+                destProfileDir: vaultDir,
+                destSessionKey: session,
+                destOrgId: isOrg ? org!.orgIds[v] : undefined,
                 log,
               });
-              if (dedupeResult.needsReview > 0) {
-                updateStep(job, dedupeId, { state: 'warning', detail: `${dedupeResult.needsReview} need review` });
+              const guardResult = evaluateGuard(diffResult, config.importGuard);
+
+              if (guardResult.blocked) {
+                addLog(job, 'app', `⚠️ Import guard tripped for ${target}: ${guardResult.reason}`);
+                updateStep(job, diffId, { state: 'warning', detail: guardResult.reason });
+                updateJobState(job, 'awaiting-confirmation');
+
+                try {
+                  confirmDecision = await waitForConfirmation(job, target, diffResult);
+                } catch {
+                  confirmDecision = 'abort';
+                }
+
+                updateJobState(job, 'running');
+
+                if (confirmDecision === 'abort') {
+                  updateJobState(job, 'aborted');
+                  break;
+                }
+                if (confirmDecision === 'skip') {
+                  addLog(job, 'app', `⏭️ Skipping import of ${target} (user decision)`);
+                  const importSteps = job.steps.filter((s) => s.id.startsWith(`${account}:import:${target}:`));
+                  for (const s of importSteps) {
+                    if (s.state === 'pending' || s.state === 'running') {
+                      updateStep(job, s.id, { state: 'skipped', detail: 'Skipped by user' });
+                    }
+                  }
+                  continue;
+                }
               } else {
-                updateStep(job, dedupeId, { state: 'succeeded', detail: `${dedupeResult.merged} merged` });
+                updateStep(job, diffId, { state: 'succeeded' });
               }
             } catch (err: unknown) {
-              updateStep(job, dedupeId, { state: 'warning', detail: String(err) });
+              addLog(job, 'app', `⚠️ Diff failed for ${target}: ${err}`);
+              updateStep(job, diffId, { state: 'warning', detail: String(err) });
+            }
+
+            if ((job.state as string) === 'aborted') break;
+
+            // Purge
+            const purgeId = `${account}:import:${target}:purge`;
+            updateStep(job, purgeId, { state: 'running' });
+
+            if (!pw) {
+              updateStep(job, purgeId, { state: 'failed', detail: 'No password cached' });
+              anyFailed = true;
+              continue;
+            }
+
+            try {
+              await purgeVault({
+                who: account,
+                email,
+                destProfileDir: vaultDir,
+                sessionKey: session,
+                destServerUrl: vault.serverUrl,
+                destOrgId: isOrg ? org!.orgIds[v] : undefined,
+                password: pw,
+              }, log);
+              updateStep(job, purgeId, { state: 'succeeded' });
+            } catch (err: unknown) {
+              updateStep(job, purgeId, { state: 'failed', detail: String(err) });
+              addLog(job, 'app', `❌ Purge failed for ${target}: ${err}`);
+              const remaining = job.steps.filter((s) =>
+                s.id.startsWith(`${account}:import:${target}:`) && s.state === 'pending',
+              );
+              for (const s of remaining) {
+                updateStep(job, s.id, { state: 'skipped', detail: 'Purge failed' });
+              }
+              anyFailed = true;
+              continue;
+            }
+
+            // Snapshot pre-import collection ids for org
+            let preImportIds: string[] = [];
+            if (isOrg) {
+              const cols = await listOrgCollections(vaultDir, session, org!.orgIds[v], log);
+              preImportIds = (cols as Array<{ id: string }>).map((c) => c.id);
+            }
+
+            // Import
+            const runId = `${account}:import:${target}:run`;
+            updateStep(job, runId, { state: 'running' });
+            const importArgs = ['import', 'bitwardenjson', backupFile, '--session', session];
+            if (isOrg) importArgs.push('--organizationid', org!.orgIds[v]);
+            const importResult = await runBw(importArgs, { profileDir: vaultDir, fifoPassword: pw ?? '', timeout: 120000 }, log);
+            if (importResult.exitCode !== 0) {
+              updateStep(job, runId, { state: 'failed', detail: 'Import failed' });
+              anyFailed = true;
+              const remaining = job.steps.filter((s) =>
+                s.id.startsWith(`${account}:import:${target}:`) && s.state === 'pending',
+              );
+              for (const s of remaining) {
+                updateStep(job, s.id, { state: 'skipped', detail: 'Import failed' });
+              }
+              continue;
+            }
+            updateStep(job, runId, { state: 'succeeded' });
+
+            // Verify
+            const verifyId = `${account}:import:${target}:verify`;
+            updateStep(job, verifyId, { state: 'running' });
+            const verifyItems = await listItems(vaultDir, session, { organizationId: isOrg ? org!.orgIds[v] : undefined }, log);
+            const verifyCount = isOrg
+              ? verifyItems.filter((i) => (i as Record<string, unknown>)['organizationId'] === org!.orgIds[v]).length
+              : verifyItems.filter((i) => !(i as Record<string, unknown>)['organizationId']).length;
+            addLog(job, 'app', `📊 Items imported for ${target}: ${verifyCount}`);
+            updateStep(job, verifyId, { state: 'succeeded', detail: `${verifyCount} items` });
+
+            // Dedupe collections (org only)
+            if (isOrg) {
+              const dedupeId = `${account}:import:${target}:dedupe`;
+              updateStep(job, dedupeId, { state: 'running' });
+              try {
+                const dedupeResult = await dedupeOrgCollections({
+                  profileDir: vaultDir,
+                  sessionKey: session,
+                  orgId: org!.orgIds[v],
+                  preImportIds,
+                  log,
+                });
+                if (dedupeResult.needsReview > 0) {
+                  updateStep(job, dedupeId, { state: 'warning', detail: `${dedupeResult.needsReview} need review` });
+                } else {
+                  updateStep(job, dedupeId, { state: 'succeeded', detail: `${dedupeResult.merged} merged` });
+                }
+              } catch (err: unknown) {
+                updateStep(job, dedupeId, { state: 'warning', detail: String(err) });
+              }
             }
           }
-        }
 
-        // Home lock
-        const homeLockId = `${account}:home:lock`;
-        updateStep(job, homeLockId, { state: 'running' });
-        await lockProfile(homeDir, log);
-        updateStep(job, homeLockId, { state: 'succeeded' });
+          // Lock this vault's profile
+          const lockStepId = `${account}:import:${v}:lock`;
+          updateStep(job, lockStepId, { state: 'running' });
+          await lockProfile(vaultDir, log);
+          updateStep(job, lockStepId, { state: 'succeeded' });
 
-        if (config.homeLogoutAfterImport) {
-          const homeLogoutId = `${account}:home:logout`;
-          updateStep(job, homeLogoutId, { state: 'running' });
-          await logoutProfile(homeDir, log);
-          updateStep(job, homeLogoutId, { state: 'succeeded' });
+          if (config.homeLogoutAfterImport) {
+            const logoutStepId = `${account}:import:${v}:logout`;
+            updateStep(job, logoutStepId, { state: 'running' });
+            await logoutProfile(vaultDir, log);
+            updateStep(job, logoutStepId, { state: 'succeeded' });
+          }
         }
       }
 
@@ -847,105 +886,57 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
       if (doCount && (job.state as string) !== 'aborted') {
         job.results = job.results ?? {};
 
-        // Cloud side
-        const countCloudLoginId = `${account}:count:cloud:login`;
-        updateStep(job, countCloudLoginId, { state: 'running' });
-        updateJobState(job, 'running');
-
-        const countCloudDir = cloudProfileDir(config.bitwardenConfigDir, account);
-        let countCloudInit: InitResult;
-        try {
-          countCloudInit = await loginWithRetry({
-            job, account, groupTargets, side: 'cloud',
-            profileKey: account, email, wantServer: config.cloudServerUrl, profileDir: countCloudDir,
-            stepId: countCloudLoginId, log,
-          });
-        } catch (err: unknown) {
-          updateStep(job, countCloudLoginId, { state: 'failed', detail: String(err) });
-          anyFailed = true;
-          countCloudInit = { ok: false, reason: 'failed', message: String(err) };
-        }
-
-        if (!countCloudInit.ok) {
-          anyFailed = true;
-          updateStep(job, `${account}:count:cloud:sync`, { state: 'skipped' });
-          for (const t of groupTargets) {
-            updateStep(job, `${account}:count:cloud:${t}`, { state: 'skipped', detail: 'Login failed' });
-          }
-          updateStep(job, `${account}:count:cloud:lock`, { state: 'skipped' });
-        } else {
-          const countCloudSession = countCloudInit.sessionKey;
-          updateStep(job, `${account}:count:cloud:sync`, { state: 'succeeded' });
-
-          for (const target of groupTargets) {
+        for (const role of ['source', 'dest'] as const) {
+          if ((job.state as string) === 'aborted') break;
+          const byRole = groupTargetsByVault(groupTargets, config, role === 'source' ? 'from' : 'to');
+          for (const [v, vTargets] of byRole) {
             if ((job.state as string) === 'aborted') break;
-            const org = config.orgs.find((o) => o.key === target);
-            const isOrg = !!org;
-            const stepId = `${account}:count:cloud:${target}`;
-            updateStep(job, stepId, { state: 'running' });
+            const vault = vaultByKey(config, v);
+
+            const loginStepId = `${account}:count:${role}:${v}:login`;
+            updateStep(job, loginStepId, { state: 'running' });
+            updateJobState(job, 'running');
+
+            const vaultDir = profileDir(config.bitwardenConfigDir, account, v);
+            let initResult: InitResult;
             try {
-              const items = await listItems(countCloudDir, countCloudSession, { organizationId: isOrg ? org!.saasId : undefined }, log);
-              const filtered = isOrg
-                ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.saasId)
-                : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
-              job.results[target] = { ...job.results[target], cloud: filtered.length };
-              recordLiveCount(target, 'cloud', filtered.length);
-              updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items` });
+              initResult = await loginWithRetry({
+                job, account, groupTargets: vTargets, vaultKey: v, vaultName: vault.name,
+                email, wantServer: vault.serverUrl, profileDir: vaultDir,
+                stepId: loginStepId, log,
+              });
             } catch (err: unknown) {
-              updateStep(job, stepId, { state: 'failed', detail: String(err) });
+              updateStep(job, loginStepId, { state: 'failed', detail: String(err) });
               anyFailed = true;
+              initResult = { ok: false, reason: 'failed', message: String(err) };
             }
-          }
 
-          updateStep(job, `${account}:count:cloud:lock`, { state: 'running' });
-          await lockProfile(countCloudDir, log);
-          updateStep(job, `${account}:count:cloud:lock`, { state: 'succeeded' });
-        }
-
-        // Home (self-hosted) side
-        if ((job.state as string) !== 'aborted') {
-          const countHomeLoginId = `${account}:count:home:login`;
-          updateStep(job, countHomeLoginId, { state: 'running' });
-          updateJobState(job, 'running');
-
-          const countHomeDir = homeProfileDir(config.bitwardenConfigDir, account);
-          let countHomeInit: InitResult;
-          try {
-            countHomeInit = await loginWithRetry({
-              job, account, groupTargets, side: 'home',
-              profileKey: `home-${account}`, email, wantServer: config.homeServerUrl, profileDir: countHomeDir,
-              stepId: countHomeLoginId, log,
-            });
-          } catch (err: unknown) {
-            updateStep(job, countHomeLoginId, { state: 'failed', detail: String(err) });
-            anyFailed = true;
-            countHomeInit = { ok: false, reason: 'failed', message: String(err) };
-          }
-
-          if (!countHomeInit.ok) {
-            anyFailed = true;
-            updateStep(job, `${account}:count:home:sync`, { state: 'skipped' });
-            for (const t of groupTargets) {
-              updateStep(job, `${account}:count:home:${t}`, { state: 'skipped', detail: 'Login failed' });
+            if (!initResult.ok) {
+              anyFailed = true;
+              updateStep(job, `${account}:count:${role}:${v}:sync`, { state: 'skipped' });
+              for (const t of vTargets) {
+                updateStep(job, `${account}:count:${role}:${v}:${t}`, { state: 'skipped', detail: 'Login failed' });
+              }
+              updateStep(job, `${account}:count:${role}:${v}:lock`, { state: 'skipped' });
+              continue;
             }
-            updateStep(job, `${account}:count:home:lock`, { state: 'skipped' });
-          } else {
-            const countHomeSession = countHomeInit.sessionKey;
-            updateStep(job, `${account}:count:home:sync`, { state: 'succeeded' });
 
-            for (const target of groupTargets) {
+            const session = initResult.sessionKey;
+            updateStep(job, `${account}:count:${role}:${v}:sync`, { state: 'succeeded' });
+
+            for (const target of vTargets) {
               if ((job.state as string) === 'aborted') break;
               const org = config.orgs.find((o) => o.key === target);
               const isOrg = !!org;
-              const stepId = `${account}:count:home:${target}`;
+              const stepId = `${account}:count:${role}:${v}:${target}`;
               updateStep(job, stepId, { state: 'running' });
               try {
-                const items = await listItems(countHomeDir, countHomeSession, { organizationId: isOrg ? org!.homeId : undefined }, log);
+                const items = await listItems(vaultDir, session, { organizationId: isOrg ? org!.orgIds[v] : undefined }, log);
                 const filtered = isOrg
-                  ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.homeId)
+                  ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === org!.orgIds[v])
                   : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
-                job.results[target] = { ...job.results[target], home: filtered.length };
-                recordLiveCount(target, 'home', filtered.length);
+                job.results[target] = { ...job.results[target], [role]: filtered.length };
+                recordLiveCount(target, role, filtered.length);
                 updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items` });
               } catch (err: unknown) {
                 updateStep(job, stepId, { state: 'failed', detail: String(err) });
@@ -953,9 +944,9 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
               }
             }
 
-            updateStep(job, `${account}:count:home:lock`, { state: 'running' });
-            await lockProfile(countHomeDir, log);
-            updateStep(job, `${account}:count:home:lock`, { state: 'succeeded' });
+            updateStep(job, `${account}:count:${role}:${v}:lock`, { state: 'running' });
+            await lockProfile(vaultDir, log);
+            updateStep(job, `${account}:count:${role}:${v}:lock`, { state: 'succeeded' });
           }
         }
       }

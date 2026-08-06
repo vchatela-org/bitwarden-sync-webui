@@ -48,7 +48,7 @@ describe('bwInit server selection', () => {
     runBwMock.mockImplementation(fakeBw({ serverUrl: null, status: 'unauthenticated' }));
 
     const result = await bwInit({
-      profileKey: 'demo', email: 'demo@example.com', wantServer: EU, profileDir: '/tmp/demo',
+      accountKey: 'demo', profileLabel: 'demo:eu', email: 'demo@example.com', wantServer: EU, profileDir: '/tmp/demo',
     });
 
     expect(result).toEqual({ ok: true, sessionKey: SESSION_KEY });
@@ -67,7 +67,7 @@ describe('bwInit server selection', () => {
     runBwMock.mockImplementation(fakeBw({ serverUrl: null, status: 'unauthenticated' }));
 
     await bwInit({
-      profileKey: 'home-demo', email: 'demo@example.com', wantServer: home, profileDir: '/tmp/home-demo',
+      accountKey: 'demo', profileLabel: 'demo:home', email: 'demo@example.com', wantServer: home, profileDir: '/tmp/home-demo',
     });
 
     expect(calls()).toContainEqual(['config', 'server', home]);
@@ -77,7 +77,7 @@ describe('bwInit server selection', () => {
     runBwMock.mockImplementation(fakeBw({ serverUrl: null, status: 'unlocked' }));
 
     const result = await bwInit({
-      profileKey: 'demo', email: 'demo@example.com', wantServer: DEFAULT_BW_SERVER, profileDir: '/tmp/demo',
+      accountKey: 'demo', profileLabel: 'demo:cloud', email: 'demo@example.com', wantServer: DEFAULT_BW_SERVER, profileDir: '/tmp/demo',
     });
 
     expect(result).toEqual({ ok: true, sessionKey: SESSION_KEY });
@@ -90,7 +90,7 @@ describe('bwInit server selection', () => {
     runBwMock.mockImplementation(fakeBw({ serverUrl: DEFAULT_BW_SERVER, status: 'locked' }));
 
     await bwInit({
-      profileKey: 'demo', email: 'demo@example.com', wantServer: EU, profileDir: '/tmp/demo',
+      accountKey: 'demo', profileLabel: 'demo:eu', email: 'demo@example.com', wantServer: EU, profileDir: '/tmp/demo',
     });
 
     const logoutIdx = calls().findIndex((a) => a[0] === 'logout');
@@ -106,7 +106,7 @@ describe('bwInit server selection', () => {
     runBwMock.mockImplementation(fakeBw({ serverUrl: EU, status: 'locked' }));
 
     await bwInit({
-      profileKey: 'demo', email: 'demo@example.com', wantServer: `${EU}/`, profileDir: '/tmp/demo',
+      accountKey: 'demo', profileLabel: 'demo:eu', email: 'demo@example.com', wantServer: `${EU}/`, profileDir: '/tmp/demo',
     });
 
     expect(calls().some((a) => a[0] === 'config')).toBe(false);

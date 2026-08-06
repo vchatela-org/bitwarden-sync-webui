@@ -2,17 +2,17 @@ import { readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 
 /**
- * Live item counts pulled straight from the vault (cloud/home) by a 'count' job, as opposed to
+ * Live item counts pulled straight from a target's vaults by a 'count' job, as opposed to
  * the counts recovered from an export sidecar (see backupCounts.ts). These only change when a
- * count job runs, so each side carries its own timestamp — cloud and home are fetched at
+ * count job runs, so each role carries its own timestamp — source and dest are fetched at
  * different points during the job and a stale count read days apart from a fresh one otherwise
  * looks identical in the UI.
  */
 export interface LiveCountEntry {
-  cloud?: number;
-  cloudAt?: string;
-  home?: number;
-  homeAt?: string;
+  source?: number;
+  sourceAt?: string;
+  dest?: number;
+  destAt?: string;
 }
 
 export type LiveCountsMap = Record<string, LiveCountEntry>;
@@ -43,11 +43,11 @@ export function getLiveCounts(): LiveCountsMap {
   return JSON.parse(JSON.stringify(load())) as LiveCountsMap;
 }
 
-/** Records a fresh count for one side of one target and persists it immediately. */
-export function recordLiveCount(target: string, side: 'cloud' | 'home', count: number): void {
+/** Records a fresh count for one role of one target and persists it immediately. */
+export function recordLiveCount(target: string, role: 'source' | 'dest', count: number): void {
   const map = load();
-  const at = side === 'cloud' ? 'cloudAt' : 'homeAt';
-  map[target] = { ...map[target], [side]: count, [at]: new Date().toISOString() };
+  const at = role === 'source' ? 'sourceAt' : 'destAt';
+  map[target] = { ...map[target], [role]: count, [at]: new Date().toISOString() };
   try {
     mkdirSync(dataDir(), { recursive: true });
     writeFileSync(storeFile(), JSON.stringify(map, null, 2));

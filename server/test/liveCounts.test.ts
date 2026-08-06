@@ -23,52 +23,52 @@ describe('live counts persistence', () => {
     expect(getLiveCounts()).toEqual({});
   });
 
-  it('records a cloud count with a timestamp', () => {
-    recordLiveCount('val', 'cloud', 42);
+  it('records a source count with a timestamp', () => {
+    recordLiveCount('val', 'source', 42);
     const counts = getLiveCounts();
-    expect(counts['val']?.cloud).toBe(42);
-    expect(counts['val']?.cloudAt).toBeTruthy();
-    expect(counts['val']?.home).toBeUndefined();
+    expect(counts['val']?.source).toBe(42);
+    expect(counts['val']?.sourceAt).toBeTruthy();
+    expect(counts['val']?.dest).toBeUndefined();
   });
 
-  it('keeps cloud and home counts independent, each with its own timestamp', () => {
-    recordLiveCount('val', 'cloud', 42);
-    recordLiveCount('val', 'home', 40);
+  it('keeps source and dest counts independent, each with its own timestamp', () => {
+    recordLiveCount('val', 'source', 42);
+    recordLiveCount('val', 'dest', 40);
     const counts = getLiveCounts();
-    expect(counts['val']).toMatchObject({ cloud: 42, home: 40 });
-    expect(counts['val']?.cloudAt).toBeTruthy();
-    expect(counts['val']?.homeAt).toBeTruthy();
+    expect(counts['val']).toMatchObject({ source: 42, dest: 40 });
+    expect(counts['val']?.sourceAt).toBeTruthy();
+    expect(counts['val']?.destAt).toBeTruthy();
   });
 
-  it('overwrites a stale count for the same target and side without touching the other side', () => {
-    recordLiveCount('val', 'cloud', 42);
-    recordLiveCount('val', 'home', 40);
-    recordLiveCount('val', 'cloud', 43);
+  it('overwrites a stale count for the same target and role without touching the other role', () => {
+    recordLiveCount('val', 'source', 42);
+    recordLiveCount('val', 'dest', 40);
+    recordLiveCount('val', 'source', 43);
     const counts = getLiveCounts();
-    expect(counts['val']).toMatchObject({ cloud: 43, home: 40 });
+    expect(counts['val']).toMatchObject({ source: 43, dest: 40 });
   });
 
   it('persists to disk so a restart does not lose counts', () => {
-    recordLiveCount('val', 'cloud', 7);
-    const onDisk = JSON.parse(readFileSync(join(root, 'live-counts.json'), 'utf-8')) as Record<string, { cloud?: number }>;
-    expect(onDisk['val']?.cloud).toBe(7);
+    recordLiveCount('val', 'source', 7);
+    const onDisk = JSON.parse(readFileSync(join(root, 'live-counts.json'), 'utf-8')) as Record<string, { source?: number }>;
+    expect(onDisk['val']?.source).toBe(7);
 
     resetLiveCountsCache();
-    expect(getLiveCounts()['val']?.cloud).toBe(7);
+    expect(getLiveCounts()['val']?.source).toBe(7);
   });
 
   it('does not let the caller mutate the internal cache', () => {
-    recordLiveCount('val', 'cloud', 1);
+    recordLiveCount('val', 'source', 1);
     const counts = getLiveCounts();
-    counts['val']!.cloud = 999;
-    expect(getLiveCounts()['val']?.cloud).toBe(1);
+    counts['val']!.source = 999;
+    expect(getLiveCounts()['val']?.source).toBe(1);
   });
 
   it('tracks multiple targets independently', () => {
-    recordLiveCount('val', 'cloud', 10);
-    recordLiveCount('org', 'cloud', 20);
+    recordLiveCount('val', 'source', 10);
+    recordLiveCount('org', 'source', 20);
     const counts = getLiveCounts();
-    expect(counts['val']?.cloud).toBe(10);
-    expect(counts['org']?.cloud).toBe(20);
+    expect(counts['val']?.source).toBe(10);
+    expect(counts['org']?.source).toBe(20);
   });
 });

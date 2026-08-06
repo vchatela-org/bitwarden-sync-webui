@@ -9,8 +9,6 @@ import {
   Archive,
   HardDriveDownload,
   Clock,
-  Cloud,
-  HardDrive,
   AlertCircle,
   ArrowUp,
   ArrowDown,
@@ -39,6 +37,9 @@ interface Target {
   displayName: string;
   /** Org owner key — used to nest orgs beneath the user that owns them. */
   owner: string | null;
+  /** Source/destination vault keys this target syncs between. */
+  from: string;
+  to: string;
 }
 
 export function Dashboard({ config, onJobCreated }: Props) {
@@ -65,12 +66,16 @@ export function Dashboard({ config, onJobCreated }: Props) {
       kind: 'user',
       displayName: u.displayName ?? u.key,
       owner: null,
+      from: u.from,
+      to: u.to,
     }));
     const orgs: Target[] = config.orgs.map((o) => ({
       key: o.key,
       kind: 'org',
       displayName: o.name,
       owner: o.owner,
+      from: o.from,
+      to: o.to,
     }));
 
     const ordered: Target[] = [];
@@ -82,6 +87,9 @@ export function Dashboard({ config, onJobCreated }: Props) {
     ordered.push(...orgs.filter((o) => !users.some((u) => u.key === o.owner)));
     return ordered;
   }, [config]);
+
+  const vaultName = (key: string): string | undefined =>
+    config.vaults.find((v) => v.key === key)?.name;
 
   // Re-read the inventory each time the dashboard is shown; the cached sets stay
   // on screen meanwhile, so a job run elsewhere is picked up without a blank flash.
@@ -214,7 +222,7 @@ export function Dashboard({ config, onJobCreated }: Props) {
             >
               Vault status
             </Button>
-            <Tooltip content="Unlocks both the cloud and home vault for each target to fetch live item counts">
+            <Tooltip content="Unlocks each target's source and destination vault to fetch live item counts">
               <span>
                 <Button
                   size="sm"
@@ -249,16 +257,8 @@ export function Dashboard({ config, onJobCreated }: Props) {
                     />
                   </Th>
                   <Th>Target</Th>
-                  <Th>
-                    <span className="inline-flex items-center gap-1.5">
-                      <Cloud className="size-3.5 text-info" /> Cloud
-                    </span>
-                  </Th>
-                  <Th>
-                    <span className="inline-flex items-center gap-1.5">
-                      <HardDrive className="size-3.5 text-violet" /> Home
-                    </span>
-                  </Th>
+                  <Th>Source</Th>
+                  <Th>Destination</Th>
                   <Th>Last backup</Th>
                   <Th className="text-right">Backup items</Th>
                   <Th className="pr-4 text-right">Sets</Th>
@@ -304,16 +304,18 @@ export function Dashboard({ config, onJobCreated }: Props) {
                       </td>
                       <td className="py-2.5 pr-3">
                         <VaultCell
-                          status={st?.cloud}
-                          liveItems={liveCounts[target.key]?.cloud}
-                          liveAt={liveCounts[target.key]?.cloudAt}
+                          status={st?.source}
+                          liveItems={liveCounts[target.key]?.source}
+                          liveAt={liveCounts[target.key]?.sourceAt}
+                          vaultName={vaultName(target.from)}
                         />
                       </td>
                       <td className="py-2.5 pr-3">
                         <VaultCell
-                          status={st?.home}
-                          liveItems={liveCounts[target.key]?.home}
-                          liveAt={liveCounts[target.key]?.homeAt}
+                          status={st?.dest}
+                          liveItems={liveCounts[target.key]?.dest}
+                          liveAt={liveCounts[target.key]?.destAt}
+                          vaultName={vaultName(target.to)}
                         />
                       </td>
                       <td className="py-2.5 pr-3">
@@ -332,8 +334,8 @@ export function Dashboard({ config, onJobCreated }: Props) {
                       <td className="py-2.5 pr-3 text-right">
                         <ItemsCell
                           lastKnown={newest?.meta?.itemCount}
-                          live={liveCounts[target.key]?.cloud}
-                          liveAt={liveCounts[target.key]?.cloudAt}
+                          live={liveCounts[target.key]?.source}
+                          liveAt={liveCounts[target.key]?.sourceAt}
                         />
                       </td>
                       <td className="py-2.5 pr-4 text-right">
@@ -434,7 +436,7 @@ function ItemsCell({ lastKnown, live, liveAt }: { lastKnown?: number; live?: num
   );
 }
 
-function VaultCell({ status, liveItems, liveAt }: { status?: VaultStatus; liveItems?: number; liveAt?: string }) {
+function VaultCell({ status, liveItems, liveAt, vaultName }: { status?: VaultStatus; liveItems?: number; liveAt?: string; vaultName?: string }) {
   const liveLabel = liveItems !== undefined && (
     <span className="inline-flex items-baseline gap-1 pl-3 text-[11px] font-medium tabular-nums text-info">
       {liveItems.toLocaleString()} items
@@ -446,8 +448,17 @@ function VaultCell({ status, liveItems, liveAt }: { status?: VaultStatus; liveIt
     </span>
   );
 
+  const nameLabel = vaultName && (
+    <span className="truncate text-[11px] text-fg-faint">{vaultName}</span>
+  );
+
   if (!status) {
-    return liveLabel || <span className="text-xs text-fg-faint">—</span>;
+    return (
+      <span className="inline-flex flex-col items-start gap-0.5">
+        {nameLabel}
+        {liveLabel || <span className="text-xs text-fg-faint">—</span>}
+      </span>
+    );
   }
   return (
     <Tooltip
@@ -459,6 +470,7 @@ function VaultCell({ status, liveItems, liveAt }: { status?: VaultStatus; liveIt
       }
     >
       <span className="inline-flex flex-col items-start gap-0.5">
+        {nameLabel}
         <StatusLabel tone={vaultTone(status.status)} pulse={status.status === 'unlocked'}>
           {status.status}
         </StatusLabel>

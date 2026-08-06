@@ -41,21 +41,21 @@ function toDiffItem(item: Record<string, unknown>): DiffItem {
 }
 
 export async function computeDiff(opts: {
-  cloudProfileDir?: string;
-  cloudSessionKey?: string;
-  cloudOrgId?: string;
-  homeProfileDir: string;
-  homeSessionKey: string;
-  homeOrgId?: string;
+  sourceProfileDir?: string;
+  sourceSessionKey?: string;
+  sourceOrgId?: string;
+  destProfileDir: string;
+  destSessionKey: string;
+  destOrgId?: string;
   meta?: BackupMeta;
   log?: LogCallback;
 }): Promise<DiffResult> {
-  const { homeProfileDir, homeSessionKey, homeOrgId, meta, log } = opts;
+  const { destProfileDir, destSessionKey, destOrgId, meta, log } = opts;
 
   // Destination count (live)
-  const destItems = await listItems(homeProfileDir, homeSessionKey, { organizationId: homeOrgId }, log);
-  const filteredDest = homeOrgId
-    ? (destItems as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === homeOrgId)
+  const destItems = await listItems(destProfileDir, destSessionKey, { organizationId: destOrgId }, log);
+  const filteredDest = destOrgId
+    ? (destItems as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === destOrgId)
     : (destItems as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
   const destCount = filteredDest.length;
 
@@ -65,11 +65,11 @@ export async function computeDiff(opts: {
 
   if (meta?.itemCount !== undefined) {
     sourceCount = meta.itemCount;
-  } else if (opts.cloudProfileDir && opts.cloudSessionKey) {
-    const cloudItems = await listItems(opts.cloudProfileDir, opts.cloudSessionKey, { organizationId: opts.cloudOrgId }, log);
-    const filtered = opts.cloudOrgId
-      ? (cloudItems as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === opts.cloudOrgId)
-      : (cloudItems as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
+  } else if (opts.sourceProfileDir && opts.sourceSessionKey) {
+    const sourceVaultItems = await listItems(opts.sourceProfileDir, opts.sourceSessionKey, { organizationId: opts.sourceOrgId }, log);
+    const filtered = opts.sourceOrgId
+      ? (sourceVaultItems as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === opts.sourceOrgId)
+      : (sourceVaultItems as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
     sourceCount = filtered.length;
     sourceItems = filtered.slice(0, 200).map(toDiffItem);
   }

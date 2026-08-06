@@ -13,10 +13,10 @@ export interface KdfConfig {
 export interface PurgeContext {
   who: string; // user key, e.g. 'val'
   email: string;
-  homeProfileDir: string;
+  destProfileDir: string;
   sessionKey: string;
-  homeServerUrl: string;
-  homeOrgId?: string; // set for org purge
+  destServerUrl: string;
+  destOrgId?: string; // set for org purge
   password: string; // master password (RAM only)
 }
 
@@ -80,14 +80,14 @@ export function readTokenAndKdf(
 }
 
 export async function purgeVault(ctx: PurgeContext, log?: LogCallback): Promise<void> {
-  const { who, email, homeProfileDir, sessionKey, homeServerUrl, homeOrgId, password } = ctx;
-  const scope = homeOrgId ? `org ${homeOrgId}` : 'personal vault';
-  log?.('app' as never, `[purge] Purging ${scope} for home-${who}...`);
+  const { who, email, destProfileDir, sessionKey, destServerUrl, destOrgId, password } = ctx;
+  const scope = destOrgId ? `org ${destOrgId}` : 'personal vault';
+  log?.('app' as never, `[purge] Purging ${scope} for ${who} (destination vault)...`);
 
   let token: string;
   let iterations: number;
   try {
-    const result = readTokenAndKdf(homeProfileDir, email);
+    const result = readTokenAndKdf(destProfileDir, email);
     token = result.token;
     iterations = result.iterations;
   } catch (err: unknown) {
@@ -96,12 +96,12 @@ export async function purgeVault(ctx: PurgeContext, log?: LogCallback): Promise<
 
   const mph = deriveMasterPasswordHash(password, email, iterations);
 
-  const apiBase = homeServerUrl.replace(/\/$/, '') + '/api';
+  const apiBase = destServerUrl.replace(/\/$/, '') + '/api';
   let purgeUrl = `${apiBase}/ciphers/purge`;
-  if (homeOrgId) purgeUrl += `?organizationId=${encodeURIComponent(homeOrgId)}`;
+  if (destOrgId) purgeUrl += `?organizationId=${encodeURIComponent(destOrgId)}`;
 
   // token comes from the bw CLI's own local session state (data.json), previously
-  // issued by this same homeServerUrl during login — not attacker-controlled file
+  // issued by this same destServerUrl during login — not attacker-controlled file
   // data, just this app re-presenting its own access token to the server that
   // issued it, exactly as the bw CLI itself does for authenticated API calls.
   // codeql[js/file-access-to-http]
@@ -123,14 +123,14 @@ export async function purgeVault(ctx: PurgeContext, log?: LogCallback): Promise<
   log?.('app' as never, `[purge] HTTP ${resp.status} — syncing to confirm...`);
 
   // Sync then verify empty
-  const syncResult = await runBw(['sync', '--session', sessionKey], { profileDir: homeProfileDir, timeout: 30000 }, log);
+  const syncResult = await runBw(['sync', '--session', sessionKey], { profileDir: destProfileDir, timeout: 30000 }, log);
   if (syncResult.exitCode !== 0) {
     throw new Error('Post-purge sync failed');
   }
 
-  const items = await listItems(homeProfileDir, sessionKey, { organizationId: homeOrgId }, log);
-  const remaining = homeOrgId
-    ? (items as Array<{ organizationId?: string }>).filter((i) => i.organizationId === homeOrgId).length
+  const items = await listItems(destProfileDir, sessionKey, { organizationId: destOrgId }, log);
+  const remaining = destOrgId
+    ? (items as Array<{ organizationId?: string }>).filter((i) => i.organizationId === destOrgId).length
     : (items as Array<{ organizationId?: string | null }>).filter((i) => !i.organizationId).length;
 
   if (remaining !== 0) {

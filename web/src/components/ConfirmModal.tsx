@@ -127,7 +127,7 @@ export function ConfirmModal({ jobId, prompt, onSubmitted, masked }: Props) {
 
         <div className="rounded-lg border border-danger-line bg-danger-soft px-3 py-2.5 text-[12px] leading-relaxed text-danger">
           <strong className="font-semibold">Purge &amp; import</strong> deletes every item in the
-          home vault for this target before re-importing. There is no undo — the newest backup set
+          destination vault for this target before re-importing. There is no undo — the newest backup set
           is the only way back.
         </div>
       </div>

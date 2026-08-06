@@ -60,9 +60,3 @@ export function refreshPassword(userKey: string): void {
     entry.expiresAt = Date.now() + IDLE_TTL_MS;
   }
 }
-
-/** Return the org owner's key for purposes of password lookup (same as bash's ${bw_who#home-}) */
-export function passwordKey(profileKey: string): string {
-  // Strip 'home-' prefix: 'home-val' → 'val', 'home-val-pro' → 'val-pro'
-  return profileKey.startsWith('home-') ? profileKey.slice(5) : profileKey;
-}

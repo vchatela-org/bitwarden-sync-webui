@@ -46,10 +46,10 @@ export async function getStatus(): Promise<Record<string, TargetStatus>> {
 }
 
 export interface LiveCountEntry {
-  cloud?: number;
-  cloudAt?: string;
-  home?: number;
-  homeAt?: string;
+  source?: number;
+  sourceAt?: string;
+  dest?: number;
+  destAt?: string;
 }
 
 export async function getLiveCounts(): Promise<Record<string, LiveCountEntry>> {
@@ -87,10 +87,10 @@ export async function deleteJobs(ids: string[]): Promise<DeleteJobsResult> {
   });
 }
 
-export async function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number): Promise<void> {
+export async function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number, sharedAcrossVaults?: boolean): Promise<void> {
   await fetchJson(`/api/jobs/${jobId}/credentials`, {
     method: 'POST',
-    body: JSON.stringify({ accountKey, password, otp, otpMethod }),
+    body: JSON.stringify({ accountKey, password, otp, otpMethod, sharedAcrossVaults }),
   });
 }
 

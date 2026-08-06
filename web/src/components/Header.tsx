@@ -1,4 +1,4 @@
-import { ShieldCheck, Cloud, HardDrive, ArrowLeftRight, LogOut } from 'lucide-react';
+import { ShieldCheck, Server, LogOut } from 'lucide-react';
 import { AppConfig } from '../types.js';
 import { cn } from '../lib/cn.js';
 import { Tooltip } from './ui/Feedback.js';
@@ -41,22 +41,17 @@ export function Header({ config, onLogout, currentPage, onNavigate }: Props) {
           )}
         </div>
 
-        {/* Server pair */}
-        {config && (
-          <div className="mx-auto hidden items-center gap-2.5 rounded-lg border border-line bg-surface px-3 py-1.5 lg:flex">
-            <Tooltip content={`Cloud source — ${config.cloudServerUrl}`}>
-              <span className="flex items-center gap-1.5 text-[11px] text-fg-muted">
-                <Cloud className="size-3.5 text-info" />
-                <span className="font-mono">{hostOf(config.cloudServerUrl)}</span>
-              </span>
-            </Tooltip>
-            <ArrowLeftRight className="size-3 text-fg-faint" />
-            <Tooltip content={`Home destination — ${config.homeServerUrl}`}>
-              <span className="flex items-center gap-1.5 text-[11px] text-fg-muted">
-                <HardDrive className="size-3.5 text-violet" />
-                <span className="font-mono">{hostOf(config.homeServerUrl)}</span>
-              </span>
-            </Tooltip>
+        {/* Configured vaults */}
+        {config && config.vaults.length > 0 && (
+          <div className="mx-auto hidden items-center gap-2 lg:flex">
+            {config.vaults.map((v) => (
+              <Tooltip key={v.key} content={`${v.name} — ${v.serverUrl}`}>
+                <span className="flex items-center gap-1.5 rounded-lg border border-line bg-surface px-2.5 py-1 text-[11px] text-fg-muted">
+                  <Server className="size-3.5 text-fg-subtle" />
+                  <span className="font-mono">{hostOf(v.serverUrl)}</span>
+                </span>
+              </Tooltip>
+            ))}
           </div>
         )}
 

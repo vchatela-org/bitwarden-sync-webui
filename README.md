@@ -6,28 +6,13 @@
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
 [![Vulnerabilities](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/vchatela-org/bitwarden-sync-webui/badges/vuln-badge.json)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/ghcr-publish.yml)
 
-A self-hosted **web UI for Bitwarden cloud → self-hosted vault synchronisation**, implemented as a
-TypeScript/Node.js backend + React SPA, deployed as a Docker image into a k3s cluster.
+A self-hosted **web UI for syncing Bitwarden vaults between any number of Bitwarden instances**
+(cloud regions, self-hosted servers, or a mix), implemented as a TypeScript/Node.js backend +
+React SPA, deployed as a Docker image into a k3s cluster.
 
-This UI began as the web companion to a private bash-based `bitwarden_export.sh` CLI tool; that script
-is not part of this repo, but the table below maps its concepts onto this codebase for reference.
-
----
-
-## How this maps to `bitwarden_export.sh`
-
-| Bash function / concept | Web UI equivalent |
-|---|---|
-| `bw-val`, `bw-home-val` | `cloudProfileDir()` / `homeProfileDir()` in `config.ts`; env set per call in `bwCli.ts` |
-| `bw-init` (login/unlock/sync state machine) | `bwInit()` in `session.ts` |
-| `ensure_master_password` / `pw_out` | `secrets.ts` (RAM-only Map) + FIFO in `bwCli.ts` |
-| `purge_vault_via_api` | `purge.ts` (PBKDF2 hash + POST /ciphers/purge) |
-| `backup_user` / `backup_org` | Export steps in `runner.ts` |
-| `import_user` / `import_org` | Import steps in `runner.ts` |
-| `dedupe_org_collections` | `collections.ts` |
-| `group_accounts` / `group_targets` | `buildAccountGroups()` in `config.ts` |
-| `backup_files[]` / `backup_failed[]` | `backupFiles` / `backupFailed` Maps in `runner.ts` |
-| `-b` / `-i` / `-u` CLI flags | Job `operations` + `targets` in the UI |
+Each user or org target declares its own source (`from`) and destination (`to`) vault, so a single
+deployment can sync different targets between different instance pairs at once (e.g. one target
+`eu → com`, another `com → selfhosted`) — see [Configuration](#configuration-targetsjson).
 
 ---
 
@@ -131,21 +116,28 @@ The config file is mounted from a ConfigMap at `CONFIG_PATH` (default `/config/t
 
 ```jsonc
 {
-  "cloudServerUrl": "https://vault.bitwarden.eu",     // EU region — do NOT use bitwarden.com
-  "homeServerUrl":  "https://bitwarden.example.internal",
+  "vaults": [
+    // Any number of named Bitwarden instances — each target below picks its own pair.
+    { "key": "cloud", "name": "Cloud", "serverUrl": "https://vault.bitwarden.eu" },  // EU region — do NOT use bitwarden.com
+    { "key": "home",  "name": "Home",  "serverUrl": "https://bitwarden.example.internal" }
+  ],
   "backupFolder":   "/backups",
   "bitwardenConfigDir": "/data/bitwarden",
   "users": [
-    { "key": "val",    "email": "val@example.com",    "displayName": "Val" },
-    { "key": "mathou", "email": "mathou@example.com" }
+    { "key": "val",    "email": "val@example.com",    "displayName": "Val", "from": "cloud", "to": "home" },
+    { "key": "mathou", "email": "mathou@example.com", "from": "cloud", "to": "home" }
   ],
   "orgs": [
     {
       "key": "org",
       "name": "My Organisation",
       "owner": "val",                                // must be a key in users[]
-      "saasId": "00000000-0000-0000-0000-000000000000",   // cloud org ID
-      "homeId": "00000000-0000-0000-0000-000000000000"    // home-server org ID
+      "from": "cloud",
+      "to": "home",
+      "orgIds": {
+        "cloud": "00000000-0000-0000-0000-000000000000",   // org ID on the cloud vault
+        "home":  "00000000-0000-0000-0000-000000000000"    // org ID on the home vault
+      }
     }
   ],
   "retention":  { "keepDaily": 7, "keepMonthly": 12 },
@@ -153,6 +145,8 @@ The config file is mounted from a ConfigMap at `CONFIG_PATH` (default `/config/t
   "homeLogoutAfterImport": true
 }
 ```
+
+Add more entries to `vaults` and point targets' `from`/`to` at them to support more instance pairs.
 
 ### Migrating from `.bitwarden-env`
 
@@ -175,7 +169,7 @@ Set the result as `UI_PASSWORD_HASH`. For development, set `UI_PASSWORD=plaintex
 
 ## Mounting an internal CA
 
-If your home Bitwarden server uses a certificate from an internal CA:
+If any of your self-hosted Bitwarden instances uses a certificate from an internal CA:
 
 1. Create a ConfigMap from your CA bundle:
    ```bash
@@ -195,8 +189,8 @@ Each backup a job produces gets a `.meta.json` sidecar recording the item, folde
 counts plus the SHA-256 of the password-protected export. The dashboard's **Items protected** tile
 and the per-set **Items** column read from it.
 
-Backups made by `bitwarden_export.sh` have no sidecar — nor do any backups predating sidecars — so
-the counts fall back to the export itself. The account-key export (`*_encrypted.json`) keeps a
+Backups predating sidecars (or produced by older external tooling) have no sidecar, so the counts
+fall back to the export itself. The account-key export (`*_encrypted.json`) keeps a
 plain-text JSON envelope, so its `items`/`folders`/`collections` arrays can be counted without the
 vault password even though every field inside them is ciphertext. `countSource` on each set says
 which source was used.

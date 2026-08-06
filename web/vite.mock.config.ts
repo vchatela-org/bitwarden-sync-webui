@@ -6,16 +6,18 @@ import tailwindcss from '@tailwindcss/vite';
 import type { Connect } from 'vite';
 
 const config = {
-  cloudServerUrl: 'https://vault.bitwarden.eu',
-  homeServerUrl: 'https://vault.home.lan',
+  vaults: [
+    { key: 'cloud', name: 'Cloud', serverUrl: 'https://vault.bitwarden.eu' },
+    { key: 'home', name: 'Home', serverUrl: 'https://vault.home.lan' },
+  ],
   users: [
-    { key: 'alice', email: 'alice@example.com', displayName: 'Alice Martin' },
-    { key: 'bob', email: 'bob@example.com' },
+    { key: 'alice', email: 'alice@example.com', displayName: 'Alice Martin', from: 'cloud', to: 'home' },
+    { key: 'bob', email: 'bob@example.com', from: 'cloud', to: 'home' },
   ],
   orgs: [
-    { key: 'acme-org', name: 'Acme Corporation', owner: 'alice' },
-    { key: 'side-project', name: 'Side Project', owner: 'alice' },
-    { key: 'bob-org', name: 'Bob Holdings', owner: 'bob' },
+    { key: 'acme-org', name: 'Acme Corporation', owner: 'alice', from: 'cloud', to: 'home' },
+    { key: 'side-project', name: 'Side Project', owner: 'alice', from: 'cloud', to: 'home' },
+    { key: 'bob-org', name: 'Bob Holdings', owner: 'bob', from: 'cloud', to: 'home' },
   ],
   retention: { keepDaily: 7, keepMonthly: 6 },
   importGuard: { minSourceRatio: 0.5, blockOnEmptySource: true },
@@ -38,7 +40,7 @@ const set = (targetKey: string, kind: 'user' | 'org', daysAgo: number, items: nu
     { path: `/backups/${targetKey}_${ts(daysAgo)}.meta.json`, filename: 'x.meta.json', targetKey, kind, timestamp: ts(daysAgo), fileType: 'meta', sizeBytes: 412 },
   ],
   sizeBytes: bytes,
-  meta: { target: targetKey, kind, timestamp: ts(daysAgo), itemCount: items, folderCount: 12, sourceServer: 'https://vault.bitwarden.eu', cliVersion: '2026.7.0', sizeBytes: bytes },
+  meta: { target: targetKey, kind, timestamp: ts(daysAgo), itemCount: items, folderCount: 12, sourceServer: config.vaults[0]!.serverUrl, cliVersion: '2026.7.0', sizeBytes: bytes },
   itemCount: items,
   folderCount: 12,
   collectionCount: kind === 'org' ? 4 : null,
@@ -87,16 +89,16 @@ const jobs = [
 
 const status = {
   alice: {
-    cloud: { status: 'unlocked', serverUrl: config.cloudServerUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 3_600_000).toISOString() },
-    home: { status: 'locked', serverUrl: config.homeServerUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 90_000_000).toISOString() },
+    source: { status: 'unlocked', serverUrl: config.vaults[0]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 3_600_000).toISOString() },
+    dest: { status: 'locked', serverUrl: config.vaults[1]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 90_000_000).toISOString() },
   },
   bob: {
-    cloud: { status: 'unauthenticated', serverUrl: config.cloudServerUrl },
-    home: null,
+    source: { status: 'unauthenticated', serverUrl: config.vaults[0]!.serverUrl },
+    dest: null,
   },
   'acme-org': {
-    cloud: { status: 'unlocked', serverUrl: config.cloudServerUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 7_200_000).toISOString() },
-    home: { status: 'unlocked', serverUrl: config.homeServerUrl, lastSync: new Date(Date.now() - 7_200_000).toISOString() },
+    source: { status: 'unlocked', serverUrl: config.vaults[0]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 7_200_000).toISOString() },
+    dest: { status: 'unlocked', serverUrl: config.vaults[1]!.serverUrl, lastSync: new Date(Date.now() - 7_200_000).toISOString() },
   },
 };
 
