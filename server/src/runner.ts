@@ -178,10 +178,15 @@ function updateStep(job: Job, stepId: string, update: Partial<Step>): void {
   emit(job.id, 'step', step);
 }
 
+const TERMINAL_JOB_STATES: JobState[] = ['succeeded', 'failed', 'partial', 'aborted'];
+
 function updateJobState(job: Job, state: JobState): void {
+  // Never transition out of a terminal state — once a job is aborted, succeeded,
+  // failed, or partial, no other code path should resurrect it.
+  if (TERMINAL_JOB_STATES.includes(job.state)) return;
   job.state = state;
   if (state === 'running' && !job.startedAt) job.startedAt = new Date().toISOString();
-  if (['succeeded', 'failed', 'partial', 'aborted'].includes(state)) {
+  if (TERMINAL_JOB_STATES.includes(state)) {
     job.endedAt = new Date().toISOString();
   }
   emit(job.id, 'job', { state });
@@ -411,6 +416,7 @@ async function loginWithRetry(opts: {
     attempt <= MAX_CREDENTIAL_ATTEMPTS && result.ok === false && (result.reason === 'needs-password' || result.reason === 'needs-otp');
     attempt++
   ) {
+    if ((job.state as string) === 'aborted') throw new Error('Job aborted or cancelled');
     updateJobState(job, 'awaiting-credentials');
     updateStep(job, stepId, { state: 'awaiting-input' });
     const creds = await waitForCredentials(job, account, groupTargets, side, result.reason === 'needs-otp');
