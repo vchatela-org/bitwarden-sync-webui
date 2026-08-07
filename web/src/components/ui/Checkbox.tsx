@@ -49,7 +49,7 @@ export function CheckboxField({
 }) {
   return (
     <label className={cn('flex cursor-pointer select-none items-center gap-2 text-[13px] text-fg-muted', className)}>
-      <Checkbox checked={checked} onCheckedChange={(v) => onCheckedChange(v === true)} />
+      <Checkbox checked={checked} onCheckedChange={(v: RC.CheckedState) => onCheckedChange(v === true)} />
       {label}
     </label>
   );
