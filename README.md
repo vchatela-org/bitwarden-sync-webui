@@ -206,36 +206,6 @@ syncs whose other endpoint is a different account, it offers a *"use this passwo
 checkbox — so one person with the same master password on both sides still types it once. Nothing
 about shared secrets is written into the config.
 
-### Migrating a pre-1.6 `targets.json`
-
-1.6 replaced `users[]` (one email per person, `from`/`to` vault keys) and org `owner`/`orgIds` with
-`accounts[] + syncs[]`. The server detects the old shape and refuses to start with a pointer here
-rather than a wall of schema errors. To convert:
-
-1. For every `users[]` entry, create **two accounts** — one per vault it referenced — and give each
-   its real email on that vault.
-2. Turn each user into a sync with the same `key`, pointing `from`/`to` at those two accounts.
-3. Move each org's `orgIds` to `ids`, drop its `owner`/`from`/`to`, and add a sync (again keeping the
-   org's old key) whose endpoints are the accounts that own it on each side.
-4. Rename `homeLogoutAfterImport` to `logoutAfterImport`.
-
-**Keep the sync keys identical to the old user/org keys** — backup filenames are built from them,
-so existing backups in `backupFolder` keep resolving and no files need renaming. Profile
-directories are keyed by account instead of `<user>__<vault>`, so each account logs in once more
-after the upgrade; master passwords were never on disk, so nothing is lost.
-
-### Migrating from `.bitwarden-env`
-
-```bash
-bash scripts/env-to-json.sh /path/to/.bitwarden-env > /tmp/targets.json
-# Review /tmp/targets.json, then add it to a ConfigMap
-```
-
-The script emits two accounts per user (same email on both vaults) and one sync per user/org, all
-routed `cloud → home` — split the emails or repoint the routes afterwards.
-
----
-
 ## Generating the UI password hash
 
 ```bash
