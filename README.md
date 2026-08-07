@@ -31,6 +31,9 @@ Fake data — no real vault, credentials or backup ever appears here. Regenerate
 <td width="50%"><img src="screenshots/03-job-detail.jpg" width="100%" alt="Job detail: step graph and live log output"><br><sub>Job detail</sub></td>
 <td width="50%"><img src="screenshots/04-backups.jpg" width="100%" alt="Backups: inventory, integrity results and retention"><br><sub>Backups</sub></td>
 </tr>
+<tr>
+<td width="50%"><img src="screenshots/05-diff.jpg" width="100%" alt="Credential diff: per-target comparison of source and destination vaults"><br><sub>Credential diff</sub></td>
+</tr>
 </table>
 
 ---
@@ -303,6 +306,49 @@ groups should re-apply it after a sync, or restrict who the sync destination org
 A superseded collection is only deleted once it has been confirmed empty. If it still holds items —
 a partial purge, or a count that could not be read — it is left in place and the step reports
 `needs review`.
+
+---
+
+## Vault diff
+
+Every **Backup + Import** and **Import** job runs two layers of diff before touching the
+destination vault:
+
+### Pre-import guard (item-level)
+
+Before purging the destination, the server compares source and destination **item counts**
+and lists the items that would be added or removed at the name level. If the source count
+drops below the configured `importGuard.minSourceRatio` (default 50%) of the destination,
+or the source is empty with `blockOnEmptySource: true`, the job pauses for a manual
+**proceed / skip / abort** decision.
+
+This catches cases where the source vault was accidentally emptied, the wrong account was
+unlocked, or the export was truncated — before any data is deleted.
+
+### Credential diff (hashed)
+
+After the import completes, a second pass compares every item in the source and destination
+vaults **by credential category** — without ever exposing a single password, TOTP seed,
+note body, hidden custom field, or card number. Each category is SHA-256 hashed
+independently, and only the hashes are compared.
+
+The result, shown in the job detail view, breaks down per target into:
+
+| Section | What it means |
+|---|---|
+| **Only in source** | Items present in the source vault but missing from the destination after import. |
+| **Only in destination** | Items in the destination that were not in the source — typically pre-existing entries the import did not touch. |
+| **Credentials differ** | Items present on both sides but with at least one credential category (password, TOTP, notes, hidden fields, or card details) that differs. The specific categories that changed are listed per item. |
+| **Identical** | Items whose credential hashes match exactly across all categories. |
+
+Items are matched by `(type, name, username)` — the same identity key used by the pre-import
+diff. When a vault contains **multiple entries with the same name and username** (duplicate
+logins, common in shared orgs), their per-category hashes are sorted before comparison so
+that listing-order differences between source and destination don't produce false positives.
+
+The diff runs on the **Diff** button (standalone) and automatically at the end of every
+**Backup + Import** and **Import** job. Standalone diff jobs unlock both vaults, compare
+them, and report the results without modifying either side.
 
 ---
 

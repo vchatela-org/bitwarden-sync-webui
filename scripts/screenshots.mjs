@@ -86,6 +86,13 @@ async function main() {
     await page.waitForTimeout(800); // let the mocked job-stream snapshot arrive
     await shoot(page, '03-job-detail.jpg');
 
+    // ── Jobs: credential diff panel ─────────────────────────────────────────
+    await page.getByText('Credential Diff', { exact: true }).waitFor();
+    // Scroll the diff panel into view for a clean screenshot
+    await page.getByText('Credential Diff', { exact: true }).scrollIntoViewIfNeeded();
+    await page.waitForTimeout(200);
+    await shoot(page, '05-diff.jpg');
+
     // ── Backups ───────────────────────────────────────────────────────────
     await page.getByRole('button', { name: 'Backups', exact: true }).click();
     await page.getByRole('heading', { name: 'Retention & pruning' }).waitFor();

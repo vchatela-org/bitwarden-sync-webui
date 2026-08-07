@@ -112,8 +112,44 @@ const logs = Array.from({ length: 40 }, (_, i) => ({
     : `[${i}] bw export --organizationid 4f2a --format json --output /backups/alice_export.json`,
 }));
 
+const secureDiffResults = {
+  alice: {
+    sourceCount: 415,
+    destCount: 412,
+    onlyInSource: [
+      { type: 1, name: 'New Bank Account', username: 'alice.bank' },
+      { type: 1, name: 'VPN Provider', username: 'alice@example.com' },
+      { type: 2, name: 'Meeting notes – Q3 planning' },
+    ],
+    onlyInDest: [
+      { type: 1, name: 'Old WiFi Network', username: null },
+      { type: 1, name: 'Retired Service', username: 'alice.old' },
+    ],
+    credentialsDiffer: [
+      { type: 1, name: 'Email Provider', username: 'alice@example.com', reasons: ['password'] },
+      { type: 1, name: 'Cloud Dashboard', username: 'admin', reasons: ['password', 'totp'] },
+      { type: 1, name: 'Shared Team Login', username: 'team@acme.corp', reasons: ['notes', 'fields'] },
+      { type: 3, name: 'Corporate Card', username: null, reasons: ['card'] },
+    ],
+    identical: 406,
+  },
+  'acme-org': {
+    sourceCount: 874,
+    destCount: 871,
+    onlyInSource: [
+      { type: 1, name: 'New Vendor Portal', username: 'procurement@acme.corp' },
+    ],
+    onlyInDest: [],
+    credentialsDiffer: [
+      { type: 1, name: 'CI/CD Token', username: 'bot-ci', reasons: ['password', 'totp'] },
+      { type: 1, name: 'Database Admin', username: 'dba', reasons: ['password'] },
+    ],
+    identical: 870,
+  },
+};
+
 const jobs = [
-  { id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', createdAt: new Date(Date.now() - 90_000).toISOString(), startedAt: new Date(Date.now() - 88_000).toISOString(), state: 'running', targets: ['alice', 'acme-org'], operations: ['both'], options: {}, steps: steps(9), logs },
+  { id: 'a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d', createdAt: new Date(Date.now() - 90_000).toISOString(), startedAt: new Date(Date.now() - 88_000).toISOString(), state: 'running', targets: ['alice', 'acme-org'], operations: ['both'], options: {}, steps: steps(9), logs, secureDiffResults },
   { id: 'b2c3d4e5-f6a7-4b8c-9d0e-1f2a3b4c5d6e', createdAt: new Date(Date.now() - 3_600_000).toISOString(), startedAt: new Date(Date.now() - 3_599_000).toISOString(), endedAt: new Date(Date.now() - 3_480_000).toISOString(), state: 'succeeded', targets: ['alice'], operations: ['backup'], options: {}, steps: steps(5).map((s) => ({ ...s, state: 'succeeded' })), logs: [] },
   { id: 'c3d4e5f6-a7b8-4c9d-0e1f-2a3b4c5d6e7f', createdAt: new Date(Date.now() - 86_400_000).toISOString(), startedAt: new Date(Date.now() - 86_399_000).toISOString(), endedAt: new Date(Date.now() - 86_100_000).toISOString(), state: 'failed', targets: ['bob', 'bob-org'], operations: ['import'], options: {}, steps: steps(6).map((s, i) => ({ ...s, state: i < 3 ? 'succeeded' : i === 3 ? 'failed' : 'skipped' })), logs: [] },
   { id: 'd4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f80', createdAt: new Date(Date.now() - 172_800_000).toISOString(), startedAt: new Date(Date.now() - 172_799_000).toISOString(), endedAt: new Date(Date.now() - 172_500_000).toISOString(), state: 'partial', targets: ['alice', 'bob', 'acme-org'], operations: ['backup'], options: {}, steps: steps(7).map((s, i) => ({ ...s, state: i === 5 ? 'warning' : 'succeeded' })), logs: [] },

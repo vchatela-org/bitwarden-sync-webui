@@ -289,7 +289,8 @@ export function computeSecureDiff(
     if (reasons.length > 0) {
       credentialsDiffer.push({ ...src.item, reasons });
     } else {
-      identical++;
+      // count items, not unique keys, so identical + onlyInSource = sourceCount
+      identical += src.hashList.length;
     }
   }
 
