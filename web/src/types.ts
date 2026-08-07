@@ -24,8 +24,12 @@ export interface DiffItem {
   username?: string | null;
 }
 
+/** Where `sourceCount` came from — see the server's diff module. */
+export type SourceCountOrigin = 'live' | 'captured' | 'meta' | 'export';
+
 export interface DiffResult {
   sourceCount: number | 'unknown';
+  sourceCountOrigin?: SourceCountOrigin;
   destCount: number;
   added: DiffItem[];
   removed: DiffItem[];

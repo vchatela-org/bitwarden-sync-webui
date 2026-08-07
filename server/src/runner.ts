@@ -17,8 +17,8 @@ import { bwInit, lockProfile, logoutProfile, listItems, listOrgCollections, Init
 import { cachePassword, getPassword, clearAllPasswords } from './secrets.js';
 import { purgeVault } from './purge.js';
 import { dedupeOrgCollections } from './collections.js';
-import { computeDiff, evaluateGuard, DiffResult } from './diff.js';
-import { findNewestExport, BackupMeta, buildBackupFilename } from './backups.js';
+import { computeDiff, evaluateGuard, toDiffItem, DiffResult, DiffItem } from './diff.js';
+import { findNewestExport, countExportItems, BackupMeta, buildBackupFilename } from './backups.js';
 import { runBw, LogCallback, getCliVersion } from './bwCli.js';
 import { redact, clearAllSecrets } from './redact.js';
 import { recordLiveCount } from './liveCounts.js';
@@ -557,6 +557,12 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
   const doCount = job.operations.includes('count');
 
   const backupFiles = new Map<string, string>(); // sync key → path
+  /**
+   * sync key → what the source vault held when it was exported this run. Listed once
+   * for the sidecar and kept so the import guard can diff against it after the source
+   * profile has been locked, instead of treating every source as an unknown.
+   */
+  const sourceItems = new Map<string, DiffItem[]>();
   const backupFailed = new Set<string>();
   let anyFailed = false;
 
@@ -667,6 +673,8 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
               const filteredMeta = isOrg
                 ? (itemsForMeta as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === orgId)
                 : (itemsForMeta as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
+              // Hand the same listing to the import guard — the source is locked by then.
+              sourceItems.set(target, filteredMeta.map(toDiffItem));
               const passContent = readFileSync(passPath);
               const sha256 = createHash('sha256').update(passContent).digest('hex');
               const sizeStat = statSync(passPath);
@@ -768,8 +776,19 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             let diffResult: DiffResult | null = null;
             let confirmDecision: 'proceed' | 'skip' | 'abort' = 'proceed';
 
+            // What the source held. Items captured during this run's backup are the
+            // best input; otherwise recover a count from the export we resolved above,
+            // which is the only handle on a backup made by an earlier run.
+            const captured = sourceItems.get(target);
+            const fileCounts = captured ? null : countExportItems(backupFile);
+            if (!captured && !fileCounts) {
+              addLog(job, 'app', `⚠️ No item count available for ${target} — the import guard will treat the source as unknown`);
+            }
+
             try {
               diffResult = await computeDiff({
+                ...(captured ? { sourceItems: captured } : {}),
+                ...(fileCounts ? { sourceCount: fileCounts.itemCount, sourceCountOrigin: fileCounts.source } : {}),
                 destProfileDir: vaultDir,
                 destSessionKey: session,
                 ...(isOrg ? { destOrgId: destOrgId! } : {}),

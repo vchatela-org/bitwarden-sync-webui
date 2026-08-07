@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { ShieldAlert, ArrowRight, AlertCircle, Minus, Plus } from 'lucide-react';
-import { ConfirmationPrompt, DiffItem } from '../types.js';
+import { ConfirmationPrompt, DiffItem, SourceCountOrigin } from '../types.js';
 import { submitConfirmation } from '../api.js';
 import { Modal } from './ui/Modal.js';
 import { Button } from './ui/Button.js';
@@ -18,6 +18,14 @@ interface Props {
 
 const REMOVED_PREVIEW = 10;
 const ADDED_PREVIEW = 5;
+
+/** Names the source count for what it is, so a tripped guard can be judged in context. */
+const SOURCE_LABEL: Record<SourceCountOrigin, string> = {
+  captured: 'Source',
+  live: 'Source (live)',
+  meta: 'Source (sidecar)',
+  export: 'Source (export)',
+};
 
 export function ConfirmModal({ jobId, prompt, onSubmitted, masked }: Props) {
   const [loading, setLoading] = useState(false);
@@ -85,7 +93,10 @@ export function ConfirmModal({ jobId, prompt, onSubmitted, masked }: Props) {
 
         {/* Source → destination counts */}
         <div className="flex items-stretch gap-2">
-          <CountBox label="Source" value={srcKnown ? (diff.sourceCount as number) : '?'} />
+          <CountBox
+            label={srcKnown ? SOURCE_LABEL[diff.sourceCountOrigin ?? 'captured'] : 'Source'}
+            value={srcKnown ? (diff.sourceCount as number) : '?'}
+          />
           <div className="flex items-center">
             <ArrowRight className="size-4 text-fg-faint" />
           </div>

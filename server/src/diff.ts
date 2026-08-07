@@ -8,8 +8,12 @@ export interface DiffItem {
   username?: string | null;
 }
 
+/** Where `sourceCount` came from — surfaced so a tripped guard can be judged in context. */
+export type SourceCountOrigin = 'live' | 'captured' | 'meta' | 'export';
+
 export interface DiffResult {
   sourceCount: number | 'unknown';
+  sourceCountOrigin?: SourceCountOrigin;
   destCount: number;
   added: DiffItem[];
   removed: DiffItem[];
@@ -23,15 +27,12 @@ export interface ImportGuardConfig {
   blockOnEmptySource: boolean;
 }
 
-function toTuple(item: Record<string, unknown>): string {
-  const type = item['type'] as number ?? 0;
-  const name = (item['name'] as string ?? '').toLowerCase();
-  const login = item['login'] as Record<string, unknown> | undefined;
-  const username = (login?.['username'] as string | null | undefined) ?? null;
-  return `${type}|${name}|${username}`;
+/** Identity used to match a source item against a destination one. */
+function toTuple(item: DiffItem): string {
+  return `${item.type}|${item.name.toLowerCase()}|${item.username ?? null}`;
 }
 
-function toDiffItem(item: Record<string, unknown>): DiffItem {
+export function toDiffItem(item: Record<string, unknown>): DiffItem {
   const login = item['login'] as Record<string, unknown> | undefined;
   return {
     type: item['type'] as number ?? 0,
@@ -41,6 +42,14 @@ function toDiffItem(item: Record<string, unknown>): DiffItem {
 }
 
 export async function computeDiff(opts: {
+  /**
+   * Items the source vault held, listed during the backup phase of this same run.
+   * The richest input — it yields the name-level added/removed lists as well as the count.
+   */
+  sourceItems?: DiffItem[];
+  /** Count alone, for an export this run did not produce (sidecar or export envelope). */
+  sourceCount?: number;
+  sourceCountOrigin?: SourceCountOrigin;
   sourceProfileDir?: string;
   sourceSessionKey?: string;
   sourceOrgId?: string;
@@ -59,44 +68,48 @@ export async function computeDiff(opts: {
     : (destItems as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
   const destCount = filteredDest.length;
 
-  // Source count
+  // Source count, best input first: items captured this run, a count read off the
+  // backup on disk, the sidecar, then a live listing of a still-unlocked source.
   let sourceCount: number | 'unknown' = 'unknown';
+  let sourceCountOrigin: SourceCountOrigin | undefined;
   let sourceItems: DiffItem[] | null = null;
 
-  if (meta?.itemCount !== undefined) {
+  if (opts.sourceItems) {
+    sourceItems = opts.sourceItems;
+    sourceCount = opts.sourceItems.length;
+    sourceCountOrigin = opts.sourceCountOrigin ?? 'captured';
+  } else if (opts.sourceCount !== undefined) {
+    sourceCount = opts.sourceCount;
+    sourceCountOrigin = opts.sourceCountOrigin ?? 'export';
+  } else if (meta?.itemCount !== undefined) {
     sourceCount = meta.itemCount;
+    sourceCountOrigin = 'meta';
   } else if (opts.sourceProfileDir && opts.sourceSessionKey) {
     const sourceVaultItems = await listItems(opts.sourceProfileDir, opts.sourceSessionKey, { organizationId: opts.sourceOrgId }, log);
     const filtered = opts.sourceOrgId
       ? (sourceVaultItems as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === opts.sourceOrgId)
       : (sourceVaultItems as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
     sourceCount = filtered.length;
-    sourceItems = filtered.slice(0, 200).map(toDiffItem);
+    sourceItems = filtered.map(toDiffItem);
+    sourceCountOrigin = 'live';
   }
 
-  // Name-level diff
-  const destSet = new Map<string, DiffItem>();
-  for (const item of filteredDest.slice(0, 200)) {
-    const di = toDiffItem(item as Record<string, unknown>);
-    destSet.set(toTuple(item as Record<string, unknown>), di);
-  }
-
+  // Name-level diff. Runs over the full sets — capping either side would invent
+  // additions and removals out of whatever order `bw list` happened to return.
   const added: DiffItem[] = [];
   const removed: DiffItem[] = [];
   let unchanged = 0;
 
   if (sourceItems) {
-    const srcTuples = new Set(sourceItems.map((i) => `${i.type}|${i.name.toLowerCase()}|${i.username ?? null}`));
-    const dstTuples = new Map(
-      filteredDest.slice(0, 200).map((i) => {
-        const di = toDiffItem(i as Record<string, unknown>);
-        return [`${di.type}|${di.name.toLowerCase()}|${di.username ?? null}`, di];
-      }),
-    );
+    const srcTuples = new Set(sourceItems.map(toTuple));
+    const dstTuples = new Map<string, DiffItem>();
+    for (const item of filteredDest) {
+      const di = toDiffItem(item);
+      dstTuples.set(toTuple(di), di);
+    }
 
     for (const src of sourceItems) {
-      const k = `${src.type}|${src.name.toLowerCase()}|${src.username ?? null}`;
-      if (dstTuples.has(k)) {
+      if (dstTuples.has(toTuple(src))) {
         unchanged++;
       } else {
         added.push(src);
@@ -127,6 +140,7 @@ export async function computeDiff(opts: {
 
   return {
     sourceCount,
+    ...(sourceCountOrigin ? { sourceCountOrigin } : {}),
     destCount,
     added: added.slice(0, 50),
     removed: removed.slice(0, 50),

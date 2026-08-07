@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync, unlinkSync, openSync, fstatSync, closeSync } from 'fs';
-import { resolve, join } from 'path';
+import { resolve, join, dirname, basename } from 'path';
 import { createHash } from 'crypto';
 import { deriveCounts, flushCountCache, pruneCountCache } from './backupCounts.js';
 
@@ -324,6 +324,31 @@ export function deleteSet(set: BackupSet): void {
   for (const file of set.files) {
     unlinkSync(file.path);
   }
+}
+
+/**
+ * Item count for an export file the runner is about to import, without needing the
+ * vault password or a live source session. Prefers the `.meta.json` sidecar written
+ * alongside it; falls back to counting the arrays in the account-key export of the
+ * same set, which is all a backup made by bitwarden_export.sh leaves behind.
+ */
+export function countExportItems(
+  exportPath: string,
+): { itemCount: number; source: 'meta' | 'export' } | null {
+  const dir = dirname(exportPath);
+  const parsed = parseBackupFilename(basename(exportPath));
+  if (!parsed) return null;
+  const { targetKey, kind, timestamp } = parsed;
+
+  const metaPath = join(dir, buildBackupFilename(targetKey, kind, timestamp, 'meta'));
+  try {
+    const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as BackupMeta;
+    if (typeof meta.itemCount === 'number') return { itemCount: meta.itemCount, source: 'meta' };
+  } catch { /* no sidecar, or corrupt — fall through to the export itself */ }
+
+  const counts = deriveCounts(join(dir, buildBackupFilename(targetKey, kind, timestamp, 'encrypted')));
+  flushCountCache();
+  return counts ? { itemCount: counts.itemCount, source: 'export' } : null;
 }
 
 /** Find the newest password-protected export for a given target */
