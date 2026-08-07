@@ -17,7 +17,7 @@ import { bwInit, lockProfile, logoutProfile, listItems, listOrgCollections, Init
 import { cachePassword, getPassword, clearAllPasswords } from './secrets.js';
 import { purgeVault } from './purge.js';
 import { reconcileOrgCollections } from './collections.js';
-import { computeDiff, evaluateGuard, toDiffItem, DiffResult, DiffItem } from './diff.js';
+import { computeDiff, evaluateGuard, toDiffItem, computeSecureDiff, DiffResult, DiffItem, SecureDiffResult } from './diff.js';
 import { findNewestExport, countExportItems, BackupMeta, buildBackupFilename } from './backups.js';
 import { runBw, LogCallback, getCliVersion } from './bwCli.js';
 import { redact, clearAllSecrets } from './redact.js';
@@ -100,6 +100,7 @@ export interface Job {
   logs: LogLine[];
   prompt?: Prompt;
   results?: Record<string, { source?: number; dest?: number }>;
+  secureDiffResults?: Record<string, SecureDiffResult>;
 }
 
 export interface JobOptions {
@@ -313,6 +314,7 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
   const doBackup = ops.includes('backup') || ops.includes('both');
   const doImport = ops.includes('import') || ops.includes('both');
   const doCount = ops.includes('count');
+  const doDiff = ops.includes('diff');
 
   const vaultNameOf = (accountKey: string): string => vaultOfAccount(config, accountKey).name;
 
@@ -364,6 +366,28 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
           }
           steps.push({ id: `${g}:count:${role}:${a}:lock`, label: `[${a}] ${vaultName} lock`, state: 'pending', group: g });
         }
+      }
+    }
+    if (doDiff) {
+      // Source snapshot
+      const srcVaultName = vaultNameOf(srcAccount);
+      steps.push({ id: `${g}:diff:src:login`, label: `[${srcAccount}] ${srcVaultName} login`, state: 'pending', group: g });
+      steps.push({ id: `${g}:diff:src:sync`, label: `[${srcAccount}] ${srcVaultName} sync`, state: 'pending', group: g });
+      for (const t of groupSyncs) {
+        steps.push({ id: `${g}:diff:src:${t}`, label: `[${t}] Snapshot source`, state: 'pending', group: g });
+      }
+      steps.push({ id: `${g}:diff:src:lock`, label: `[${srcAccount}] ${srcVaultName} lock`, state: 'pending', group: g });
+      // Destination snapshot + compare (may span multiple dest accounts)
+      for (const [destAccount, dSyncs] of groupSyncsByAccount(groupSyncs, config, 'to')) {
+        const dstVaultName = vaultNameOf(destAccount);
+        const d = destAccount;
+        steps.push({ id: `${g}:diff:dst:${d}:login`, label: `[${d}] ${dstVaultName} login`, state: 'pending', group: g });
+        steps.push({ id: `${g}:diff:dst:${d}:sync`, label: `[${d}] ${dstVaultName} sync`, state: 'pending', group: g });
+        for (const t of dSyncs) {
+          steps.push({ id: `${g}:diff:dst:${d}:${t}`, label: `[${t}] Snapshot destination`, state: 'pending', group: g });
+          steps.push({ id: `${g}:diff:compare:${t}`, label: `[${t}] Compare (hashed)`, state: 'pending', group: g });
+        }
+        steps.push({ id: `${g}:diff:dst:${d}:lock`, label: `[${d}] ${dstVaultName} lock`, state: 'pending', group: g });
       }
     }
   }
@@ -604,6 +628,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
   const doBackup = job.operations.includes('backup') || job.operations.includes('both');
   const doImport = job.operations.includes('import') || job.operations.includes('both');
   const doCount = job.operations.includes('count');
+  const doDiff = job.operations.includes('diff');
 
   const backupFiles = new Map<string, string>(); // sync key → path
   /**
@@ -1055,6 +1080,155 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateStep(job, `${srcAccount}:count:${role}:${account}:lock`, { state: 'running' });
             await lockProfile(vaultDir, log);
             updateStep(job, `${srcAccount}:count:${role}:${account}:lock`, { state: 'succeeded' });
+          }
+        }
+      }
+
+      // ─── DIFF PHASE (secure credential comparison, no clear-text leaves memory) ─
+      if (doDiff && !aborted()) {
+        // Step 1: snapshot source vault — list all items, hash credentials, discard raw data
+        const srcVaultDir = profileDir(config.bitwardenConfigDir, srcAccount);
+
+        const srcLoginStepId = `${srcAccount}:diff:src:login`;
+        updateStep(job, srcLoginStepId, { state: 'running' });
+        updateJobState(job, 'running');
+
+        let srcInitResult: InitResult;
+        try {
+          srcInitResult = await loginWithRetry({
+            job, config, account: srcAccount, groupTargets: groupSyncs, stepId: srcLoginStepId, log,
+          });
+        } catch (err: unknown) {
+          updateStep(job, srcLoginStepId, { state: 'failed', detail: String(err) });
+          srcInitResult = { ok: false, reason: 'failed', message: String(err) };
+        }
+
+        if (!srcInitResult.ok) {
+          anyFailed = true;
+          updateStep(job, `${srcAccount}:diff:src:sync`, { state: 'skipped', detail: 'Login failed' });
+          for (const t of groupSyncs) skipPending(`${srcAccount}:diff:src:${t}`, 'Login failed');
+          updateStep(job, `${srcAccount}:diff:src:lock`, { state: 'skipped', detail: 'Login failed' });
+          for (const [destAccount, dSyncs] of groupSyncsByAccount(groupSyncs, config, 'to')) {
+            skipPending(`${srcAccount}:diff:dst:${destAccount}:`, 'Source login failed');
+            for (const t of dSyncs) skipPending(`${srcAccount}:diff:compare:${t}`, 'Source login failed');
+          }
+        } else {
+          const srcSession = srcInitResult.sessionKey;
+          updateStep(job, `${srcAccount}:diff:src:sync`, { state: 'succeeded' });
+
+          // Collect source snapshots per target (raw items in memory only, never persisted)
+          const srcSnapshots = new Map<string, Array<Record<string, unknown>>>();
+          for (const target of groupSyncs) {
+            if (aborted()) break;
+            const sync = syncByKey(config, target);
+            const isOrg = !!sync.org;
+            const orgId = syncOrgId(config, sync, srcVault.key);
+            const stepId = `${srcAccount}:diff:src:${target}`;
+            updateStep(job, stepId, { state: 'running' });
+            try {
+              const items = await listItems(srcVaultDir, srcSession, { ...(isOrg ? { organizationId: orgId! } : {}) }, log);
+              const filtered = isOrg
+                ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === orgId)
+                : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
+              srcSnapshots.set(target, filtered);
+              updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items captured` });
+            } catch (err: unknown) {
+              updateStep(job, stepId, { state: 'failed', detail: String(err) });
+              anyFailed = true;
+            }
+          }
+
+          updateStep(job, `${srcAccount}:diff:src:lock`, { state: 'running' });
+          await lockProfile(srcVaultDir, log);
+          updateStep(job, `${srcAccount}:diff:src:lock`, { state: 'succeeded' });
+
+          // Step 2: snapshot each destination vault, then compute hashed diff immediately
+          for (const [destAccount, dSyncs] of groupSyncsByAccount(groupSyncs, config, 'to')) {
+            if (aborted()) break;
+            const destVault = vaultOfAccount(config, destAccount);
+            const dstVaultDir = profileDir(config.bitwardenConfigDir, destAccount);
+
+            const dstLoginStepId = `${srcAccount}:diff:dst:${destAccount}:login`;
+            updateStep(job, dstLoginStepId, { state: 'running' });
+
+            let dstInitResult: InitResult;
+            try {
+              dstInitResult = await loginWithRetry({
+                job, config, account: destAccount, groupTargets: dSyncs, stepId: dstLoginStepId, log,
+              });
+            } catch (err: unknown) {
+              updateStep(job, dstLoginStepId, { state: 'failed', detail: String(err) });
+              dstInitResult = { ok: false, reason: 'failed', message: String(err) };
+            }
+
+            if (!dstInitResult.ok) {
+              anyFailed = true;
+              updateStep(job, `${srcAccount}:diff:dst:${destAccount}:sync`, { state: 'skipped', detail: 'Login failed' });
+              for (const t of dSyncs) {
+                updateStep(job, `${srcAccount}:diff:dst:${destAccount}:${t}`, { state: 'skipped', detail: 'Login failed' });
+                updateStep(job, `${srcAccount}:diff:compare:${t}`, { state: 'skipped', detail: 'Dest login failed' });
+              }
+              updateStep(job, `${srcAccount}:diff:dst:${destAccount}:lock`, { state: 'skipped', detail: 'Login failed' });
+              continue;
+            }
+
+            const dstSession = dstInitResult.sessionKey;
+            updateStep(job, `${srcAccount}:diff:dst:${destAccount}:sync`, { state: 'succeeded' });
+
+            for (const target of dSyncs) {
+              if (aborted()) break;
+              const sync = syncByKey(config, target);
+              const isOrg = !!sync.org;
+              const orgId = syncOrgId(config, sync, destVault.key);
+
+              const dstStepId = `${srcAccount}:diff:dst:${destAccount}:${target}`;
+              updateStep(job, dstStepId, { state: 'running' });
+
+              let dstItems: Array<Record<string, unknown>> = [];
+              try {
+                const items = await listItems(dstVaultDir, dstSession, { ...(isOrg ? { organizationId: orgId! } : {}) }, log);
+                dstItems = isOrg
+                  ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === orgId)
+                  : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
+                updateStep(job, dstStepId, { state: 'succeeded', detail: `${dstItems.length} items captured` });
+              } catch (err: unknown) {
+                updateStep(job, dstStepId, { state: 'failed', detail: String(err) });
+                updateStep(job, `${srcAccount}:diff:compare:${target}`, { state: 'skipped', detail: 'Dest snapshot failed' });
+                anyFailed = true;
+                continue;
+              }
+
+              // Compare: all credential data is hashed inside computeSecureDiff,
+              // raw items are discarded immediately after the call.
+              const compareStepId = `${srcAccount}:diff:compare:${target}`;
+              updateStep(job, compareStepId, { state: 'running' });
+              const srcItems = srcSnapshots.get(target) ?? [];
+              const result = computeSecureDiff(srcItems, dstItems);
+              // Discard raw data — only the result (hashes compared, values gone) survives.
+              srcSnapshots.delete(target);
+
+              job.secureDiffResults = job.secureDiffResults ?? {};
+              job.secureDiffResults[target] = result;
+              // Broadcast the updated diff results so connected clients update in real time.
+              emit(job.id, 'job', { secureDiffResults: job.secureDiffResults });
+              persistJob(job);
+
+              const diffParts: string[] = [];
+              if (result.onlyInSource.length > 0) diffParts.push(`${result.onlyInSource.length} only in source`);
+              if (result.onlyInDest.length > 0) diffParts.push(`${result.onlyInDest.length} only in dest`);
+              if (result.credentialsDiffer.length > 0) diffParts.push(`${result.credentialsDiffer.length} credential mismatch`);
+              const summary = diffParts.length > 0 ? diffParts.join(', ') : 'vaults are identical';
+              addLog(job, 'app', `🔍 [${target}] Diff: ${summary} (${result.identical} identical)`);
+
+              updateStep(job, compareStepId, {
+                state: result.onlyInSource.length + result.onlyInDest.length + result.credentialsDiffer.length > 0 ? 'warning' : 'succeeded',
+                detail: summary,
+              });
+            }
+
+            updateStep(job, `${srcAccount}:diff:dst:${destAccount}:lock`, { state: 'running' });
+            await lockProfile(dstVaultDir, log);
+            updateStep(job, `${srcAccount}:diff:dst:${destAccount}:lock`, { state: 'succeeded' });
           }
         }
       }

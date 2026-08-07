@@ -13,6 +13,7 @@ import {
   ArrowUp,
   ArrowDown,
   Check,
+  GitCompareArrows,
 } from 'lucide-react';
 import { AppConfig, BackupSet, SyncConfig, VaultStatus } from '../types.js';
 import { useDashboardData } from '../state/DashboardData.js';
@@ -378,6 +379,9 @@ export function Dashboard({ config, onJobCreated }: Props) {
             </Button>
             <Button icon={<Download />} onClick={() => run(['import'])}>
               Import
+            </Button>
+            <Button icon={<GitCompareArrows />} onClick={() => run(['diff'])}>
+              Diff
             </Button>
             <Button variant="primary" icon={<RotateCw />} onClick={() => run(['both'])}>
               Backup + Import

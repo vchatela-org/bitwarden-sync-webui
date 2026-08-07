@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
-import { ArrowLeft, Ban, AlertCircle, X, Minus, Plus } from 'lucide-react';
-import { Job, Prompt, CredentialPrompt, ConfirmationPrompt, Step, LogLine } from '../types.js';
+import { ArrowLeft, Ban, AlertCircle, X, Minus, Plus, GitCompareArrows, ShieldCheck, ShieldAlert } from 'lucide-react';
+import { Job, Prompt, CredentialPrompt, ConfirmationPrompt, Step, LogLine, DiffItem, SecureDiffResult } from '../types.js';
 import { getJob, cancelJob, openJobStream } from '../api.js';
 import { StepGraph } from './StepGraph.js';
 import { Terminal } from './Terminal.js';
@@ -59,8 +59,15 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
           return { ...prev, steps: prev.steps.map((s) => s.id === step.id ? step : s) };
         });
       } else if (msg.type === 'job' && msg.data) {
-        const jUpdate = msg.data as { state: string };
-        setJob((prev) => prev ? { ...prev, state: jUpdate.state as Job['state'] } : prev);
+        const jUpdate = msg.data as { state?: string; secureDiffResults?: Job['secureDiffResults'] };
+        setJob((prev) => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            ...(jUpdate.state !== undefined ? { state: jUpdate.state as Job['state'] } : {}),
+            ...(jUpdate.secureDiffResults !== undefined ? { secureDiffResults: jUpdate.secureDiffResults } : {}),
+          };
+        });
       } else if (msg.type === 'prompt') {
         const prompt = msg.data as Prompt | null;
         setJob((prev) => prev ? { ...prev, prompt: prompt ?? undefined } : prev);
@@ -198,6 +205,94 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
           masked={masked}
         />
       )}
+
+      {/* ── Secure diff results ──────────────────────────────────────────── */}
+      {job.secureDiffResults && Object.keys(job.secureDiffResults).length > 0 && (
+        <SecureDiffPanel results={job.secureDiffResults} masked={!!masked} />
+      )}
     </section>
+  );
+}
+
+const ITEM_TYPE: Record<number, string> = { 1: 'Login', 2: 'Note', 3: 'Card', 4: 'Identity' };
+
+function DiffSection({ title, items, tone, masked }: {
+  title: string;
+  items: DiffItem[];
+  tone: 'source' | 'dest' | 'mismatch';
+  masked: boolean;
+}) {
+  const colors = {
+    source: 'text-blue-400',
+    dest: 'text-orange-400',
+    mismatch: 'text-yellow-400',
+  };
+  return (
+    <div>
+      <p className={`mb-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] ${colors[tone]}`}>
+        {title} ({items.length})
+      </p>
+      <ul className="space-y-0.5">
+        {items.map((item, i) => (
+          <li key={i} className="flex items-center gap-2 rounded px-2 py-0.5 text-[12px] text-fg-muted hover:bg-surface-2">
+            <span className="font-mono text-[10px] text-fg-faint w-10 shrink-0">{ITEM_TYPE[item.type] ?? `#${item.type}`}</span>
+            <span className="truncate">{masked ? '••••••' : item.name}</span>
+            {item.username && (
+              <span className="truncate text-fg-subtle text-[11px]">{masked ? '••' : item.username}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function SecureDiffPanel({ results, masked }: { results: Record<string, SecureDiffResult>; masked: boolean }) {
+  const targets = Object.keys(results);
+  const allIdentical = targets.every((t) => {
+    const r = results[t]!;
+    return r.onlyInSource.length === 0 && r.onlyInDest.length === 0 && r.credentialsDiffer.length === 0;
+  });
+
+  return (
+    <Card className="overflow-hidden">
+      <div className="flex items-center gap-2 border-b border-line bg-surface-2/60 px-4 py-3">
+        <GitCompareArrows className="size-4 text-fg-subtle" />
+        <h3 className="text-[13px] font-semibold text-fg">Credential Diff</h3>
+        {allIdentical ? (
+          <span className="ml-auto flex items-center gap-1 text-[11px] text-green-400">
+            <ShieldCheck className="size-3.5" /> All vaults identical
+          </span>
+        ) : (
+          <span className="ml-auto flex items-center gap-1 text-[11px] text-yellow-400">
+            <ShieldAlert className="size-3.5" /> Differences found
+          </span>
+        )}
+      </div>
+      <div className="divide-y divide-line">
+        {targets.map((target) => {
+          const r = results[target]!;
+          const hasDiffs = r.onlyInSource.length + r.onlyInDest.length + r.credentialsDiffer.length > 0;
+          return (
+            <div key={target} className="px-4 py-3 space-y-3">
+              <div className="flex items-center gap-3">
+                <span className="font-medium text-[13px] text-fg">{target}</span>
+                <span className="text-[11px] text-fg-subtle">{r.sourceCount} source · {r.destCount} dest · {r.identical} identical</span>
+                {!hasDiffs && <span className="ml-auto text-[11px] text-green-400">✓ identical</span>}
+              </div>
+              {r.onlyInSource.length > 0 && (
+                <DiffSection title="Only in source" items={r.onlyInSource} tone="source" masked={masked} />
+              )}
+              {r.onlyInDest.length > 0 && (
+                <DiffSection title="Only in destination" items={r.onlyInDest} tone="dest" masked={masked} />
+              )}
+              {r.credentialsDiffer.length > 0 && (
+                <DiffSection title="Credentials differ" items={r.credentialsDiffer} tone="mismatch" masked={masked} />
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </Card>
   );
 }

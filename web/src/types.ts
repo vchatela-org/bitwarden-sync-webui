@@ -38,6 +38,16 @@ export interface DiffResult {
   guardReason?: string;
 }
 
+/** Result of a secure (hashed) credential diff between source and destination vaults. */
+export interface SecureDiffResult {
+  sourceCount: number;
+  destCount: number;
+  onlyInSource: DiffItem[];
+  onlyInDest: DiffItem[];
+  credentialsDiffer: DiffItem[];
+  identical: number;
+}
+
 export interface CredentialPrompt {
   kind: 'credentials';
   accountKey: string;
@@ -76,6 +86,7 @@ export interface Job {
   logs: LogLine[];
   prompt?: Prompt;
   results?: Record<string, { source?: number; dest?: number }>;
+  secureDiffResults?: Record<string, SecureDiffResult>;
 }
 
 export interface VaultConfig {

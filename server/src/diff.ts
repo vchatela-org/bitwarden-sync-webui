@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { listItems } from './session.js';
 import { LogCallback } from './bwCli.js';
 import { BackupMeta } from './backups.js';
@@ -170,4 +171,120 @@ export function evaluateGuard(
     };
   }
   return { blocked: false };
+}
+
+// ── Secure credential diff ────────────────────────────────────────────────────
+// Operates entirely on hashed credential data — no clear-text password or secret
+// field ever leaves this function or appears in logs/results.
+
+export interface SecureDiffResult {
+  sourceCount: number;
+  destCount: number;
+  /** Items present in source but absent from destination (matched by type+name+username). */
+  onlyInSource: DiffItem[];
+  /** Items present in destination but absent from source. */
+  onlyInDest: DiffItem[];
+  /** Items present on both sides but whose credential hash differs. */
+  credentialsDiffer: DiffItem[];
+  /** Items present on both sides with identical credential hash. */
+  identical: number;
+}
+
+/**
+ * Builds a SHA-256 digest of all credential-sensitive fields in a vault item.
+ * The output is a fixed-length hex string — safe to compare, safe to log or store.
+ * The input item is never mutated and no field value is returned to the caller.
+ */
+function hashCredentials(item: Record<string, unknown>): string {
+  const h = createHash('sha256');
+
+  // Login credentials
+  const login = item['login'] as Record<string, unknown> | null | undefined;
+  if (login) {
+    h.update('password:');
+    h.update(String(login['password'] ?? ''));
+    h.update('\ntotp:');
+    h.update(String(login['totp'] ?? ''));
+  }
+
+  // Card credentials
+  const card = item['card'] as Record<string, unknown> | null | undefined;
+  if (card) {
+    h.update('\ncard.number:');
+    h.update(String(card['number'] ?? ''));
+    h.update('\ncard.code:');
+    h.update(String(card['code'] ?? ''));
+  }
+
+  // Secure note / shared notes field
+  h.update('\nnotes:');
+  h.update(String(item['notes'] ?? ''));
+
+  // Custom fields — type 1 = hidden (password-like), type 0 = text, type 2 = boolean
+  const fields = item['fields'] as Array<Record<string, unknown>> | null | undefined;
+  if (Array.isArray(fields)) {
+    for (const f of fields) {
+      h.update(`\nfield:${String(f['name'] ?? '')}:${String(f['value'] ?? '')}`);
+    }
+  }
+
+  return h.digest('hex');
+}
+
+/**
+ * Compares two full vault listings (raw `bw list items` output) without ever
+ * exposing credential values. Sensitive fields are hashed immediately; only the
+ * hash is retained for comparison. The lists are discarded after this call.
+ */
+export function computeSecureDiff(
+  sourceItems: Array<Record<string, unknown>>,
+  destItems: Array<Record<string, unknown>>,
+): SecureDiffResult {
+  // Build identity→hash maps for each side
+  const srcMap = new Map<string, { item: DiffItem; hash: string }>();
+  for (const raw of sourceItems) {
+    const item = toDiffItem(raw);
+    const key = toTuple(item);
+    // If the same key appears twice (duplicate names), last write wins — consistent
+    // with how import treats duplicates.
+    srcMap.set(key, { item, hash: hashCredentials(raw) });
+  }
+
+  const dstMap = new Map<string, { item: DiffItem; hash: string }>();
+  for (const raw of destItems) {
+    const item = toDiffItem(raw);
+    const key = toTuple(item);
+    dstMap.set(key, { item, hash: hashCredentials(raw) });
+  }
+
+  const onlyInSource: DiffItem[] = [];
+  const credentialsDiffer: DiffItem[] = [];
+  let identical = 0;
+
+  for (const [key, src] of srcMap) {
+    const dst = dstMap.get(key);
+    if (!dst) {
+      onlyInSource.push(src.item);
+    } else if (src.hash !== dst.hash) {
+      credentialsDiffer.push(src.item);
+    } else {
+      identical++;
+    }
+  }
+
+  const onlyInDest: DiffItem[] = [];
+  for (const [key, dst] of dstMap) {
+    if (!srcMap.has(key)) {
+      onlyInDest.push(dst.item);
+    }
+  }
+
+  return {
+    sourceCount: srcMap.size,
+    destCount: dstMap.size,
+    onlyInSource,
+    onlyInDest,
+    credentialsDiffer,
+    identical,
+  };
 }
