@@ -78,6 +78,15 @@ export interface ConfirmationPrompt {
 
 export type Prompt = CredentialPrompt | ConfirmationPrompt;
 
+/** A single fresh reading of one side of one target, pushed to clients as the job takes it. */
+export interface LiveCountUpdate {
+  target: string;
+  role: 'source' | 'dest';
+  count: number;
+  /** When the reading was taken, ISO — the same stamp the persisted store holds. */
+  at: string;
+}
+
 export interface Job {
   id: string;
   createdAt: string;
@@ -123,7 +132,8 @@ const DATA_DIR = process.env['DATA_DIR'] ?? '/data';
 const JOBS_DIR = join(DATA_DIR, 'jobs');
 
 // EventEmitter-like callbacks for WebSocket streaming
-type JobUpdateCallback = (jobId: string, event: 'log' | 'step' | 'job' | 'prompt', data: unknown) => void;
+type JobEvent = 'log' | 'step' | 'job' | 'prompt' | 'counts';
+type JobUpdateCallback = (jobId: string, event: JobEvent, data: unknown) => void;
 const listeners = new Set<JobUpdateCallback>();
 
 export function addJobListener(cb: JobUpdateCallback): void {
@@ -134,10 +144,25 @@ export function removeJobListener(cb: JobUpdateCallback): void {
   listeners.delete(cb);
 }
 
-function emit(jobId: string, event: 'log' | 'step' | 'job' | 'prompt', data: unknown): void {
+function emit(jobId: string, event: JobEvent, data: unknown): void {
   for (const cb of listeners) {
     try { cb(jobId, event, data); } catch { /* ignore */ }
   }
+}
+
+/**
+ * Files a count this job actually observed in a vault: onto the job's own results, into the
+ * persisted live-count store, and out to connected clients. Every phase that lists a vault
+ * goes through here — the backup's sidecar listing of the source and the import's post-import
+ * verify of the destination are live readings just as much as a 'count' job's are, and the
+ * dashboard should not need a separate count run to catch up with them.
+ */
+function recordCount(job: Job, target: string, role: 'source' | 'dest', count: number): void {
+  const at = recordLiveCount(target, role, count);
+  job.results = job.results ?? {};
+  job.results[target] = { ...job.results[target], [role]: count };
+  const update: LiveCountUpdate = { target, role, count, at };
+  emit(job.id, 'counts', update);
 }
 
 function persistJob(job: Job): void {
@@ -710,6 +735,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
                 : (itemsForMeta as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
               // Hand the same listing to the import guard — the source is locked by then.
               sourceItems.set(target, filteredMeta.map(toDiffItem));
+              recordCount(job, target, 'source', filteredMeta.length);
               const passContent = readFileSync(passPath);
               const sha256 = createHash('sha256').update(passContent).digest('hex');
               const sizeStat = statSync(passPath);
@@ -925,6 +951,9 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
               ? verifyItems.filter((i) => (i as Record<string, unknown>)['organizationId'] === destOrgId).length
               : verifyItems.filter((i) => !(i as Record<string, unknown>)['organizationId']).length;
             addLog(job, 'app', `📊 Items imported for ${target}: ${verifyCount}`);
+            // Taken after the import, so it is what the destination now holds — the same
+            // reading a 'count' job would go and fetch.
+            recordCount(job, target, 'dest', verifyCount);
             updateStep(job, verifyId, { state: 'succeeded', detail: `${verifyCount} items` });
 
             // Reconcile collections (org only)
@@ -967,8 +996,6 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
 
       // ─── COUNT PHASE (live item counts, no export) ─────────────────────────
       if (doCount && !aborted()) {
-        job.results = job.results ?? {};
-
         for (const role of ['source', 'dest'] as const) {
           if (aborted()) break;
           const byAccount = groupSyncsByAccount(groupSyncs, config, role === 'source' ? 'from' : 'to');
@@ -1017,8 +1044,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
                 const filtered = isOrg
                   ? (items as Array<Record<string, unknown>>).filter((i) => i['organizationId'] === orgId)
                   : (items as Array<Record<string, unknown>>).filter((i) => !i['organizationId']);
-                job.results[target] = { ...job.results[target], [role]: filtered.length };
-                recordLiveCount(target, role, filtered.length);
+                recordCount(job, target, role, filtered.length);
                 updateStep(job, stepId, { state: 'succeeded', detail: `${filtered.length} items` });
               } catch (err: unknown) {
                 updateStep(job, stepId, { state: 'failed', detail: String(err) });

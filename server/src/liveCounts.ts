@@ -43,15 +43,21 @@ export function getLiveCounts(): LiveCountsMap {
   return JSON.parse(JSON.stringify(load())) as LiveCountsMap;
 }
 
-/** Records a fresh count for one role of one target and persists it immediately. */
-export function recordLiveCount(target: string, role: 'source' | 'dest', count: number): void {
+/**
+ * Records a fresh count for one role of one target and persists it immediately.
+ * Returns the timestamp it was stamped with, so the caller can push the same reading
+ * to connected clients without re-reading the store.
+ */
+export function recordLiveCount(target: string, role: 'source' | 'dest', count: number): string {
   const map = load();
-  const at = role === 'source' ? 'sourceAt' : 'destAt';
-  map[target] = { ...map[target], [role]: count, [at]: new Date().toISOString() };
+  const at = new Date().toISOString();
+  const atKey = role === 'source' ? 'sourceAt' : 'destAt';
+  map[target] = { ...map[target], [role]: count, [atKey]: at };
   try {
     mkdirSync(dataDir(), { recursive: true });
     writeFileSync(storeFile(), JSON.stringify(map, null, 2));
   } catch { /* best-effort — never fail the count job over persistence */ }
+  return at;
 }
 
 /** Test seam — forget everything held in memory. */

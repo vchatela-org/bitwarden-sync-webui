@@ -7,7 +7,15 @@ import {
   Prompt,
   TargetStatus,
 } from '../types.js';
-import { createJob, getBackups, getLiveCounts, getStatus, openJobStream, LiveCountEntry } from '../api.js';
+import {
+  createJob,
+  getBackups,
+  getLiveCounts,
+  getStatus,
+  openJobStream,
+  LiveCountEntry,
+  LiveCountUpdate,
+} from '../api.js';
 import { CredentialModal } from '../components/CredentialModal.js';
 import { isActive } from '../lib/status.js';
 
@@ -23,6 +31,12 @@ interface DashboardData {
   liveCounts: LiveCounts;
   countLoading: boolean;
   startCounts: (targets: string[]) => Promise<void>;
+
+  /**
+   * Starts a backup/import job and follows it, so the counts it takes along the way land in
+   * `liveCounts`. Resolves with the new job id; rejects if the job could not be created.
+   */
+  startJob: (targets: string[], operations: string[]) => Promise<string>;
 
   backupSets: BackupSet[];
   refreshBackups: () => Promise<void>;
@@ -57,6 +71,7 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
   const [countJobId, setCountJobId] = useState<string | null>(null);
   const [countJob, setCountJob] = useState<Job | null>(null);
   const [countLoading, setCountLoading] = useState(false);
+  const [runJobId, setRunJobId] = useState<string | null>(null);
 
   const refreshStatus = useCallback(async () => {
     setStatusLoading(true);
@@ -78,10 +93,25 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
   }, []);
 
   // Live counts are persisted server-side (server/src/liveCounts.ts), so the last known count
-  // and when it was taken survive a page reload or a server restart — only a fresh 'count' job
-  // changes them from here on.
+  // and when it was taken survive a page reload or a server restart.
   useEffect(() => {
     getLiveCounts().then(setLiveCounts).catch(() => { /* non-fatal — dashboard still works without it */ });
+  }, []);
+
+  /**
+   * Folds one reading pushed by a running job into the table. Every job that lists a vault
+   * reports what it saw — a backup its source, an import its destination after the fact — so
+   * the numbers move as the job runs rather than only when a 'count' job is asked for.
+   */
+  const applyLiveCount = useCallback((u: LiveCountUpdate) => {
+    setLiveCounts((prev) => ({
+      ...prev,
+      [u.target]: {
+        ...prev[u.target],
+        [u.role]: u.count,
+        [u.role === 'source' ? 'sourceAt' : 'destAt']: u.at,
+      },
+    }));
   }, []);
 
   const startCounts = useCallback(async (targets: string[]) => {
@@ -121,7 +151,9 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
 
     ws.onmessage = (evt) => {
       const msg = JSON.parse(evt.data as string) as { type: string; data?: unknown; job?: Job };
-      if (msg.type === 'snapshot' && msg.job) {
+      if (msg.type === 'counts' && msg.data) {
+        applyLiveCount(msg.data as LiveCountUpdate);
+      } else if (msg.type === 'snapshot' && msg.job) {
         setCountJob(msg.job);
         if (!isActive(msg.job.state)) finish();
       } else if (msg.type === 'prompt') {
@@ -142,7 +174,52 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
       cancelled = true;
       ws.close();
     };
-  }, [countJobId]);
+  }, [countJobId, applyLiveCount]);
+
+  const startJob = useCallback(async (targets: string[], operations: string[]) => {
+    const r = await createJob(targets, operations);
+    setRunJobId(r.jobId);
+    return r.jobId;
+  }, []);
+
+  // A backup/import job takes live readings of its own — the source listing behind the backup
+  // sidecar, the destination listing behind the import verify — so follow the one this
+  // dashboard started and let its counts land here directly. Prompts are deliberately not
+  // handled: the user is sent to the job view, which owns the modals for these jobs.
+  useEffect(() => {
+    if (!runJobId) return;
+    const ws = openJobStream(runJobId);
+    let settled = false;
+
+    async function settle() {
+      if (settled) return;
+      settled = true;
+      setRunJobId(null);
+      // Re-read the store on the way out: it is authoritative, and it recovers any reading
+      // pushed while this socket was down (or before the page was open).
+      try {
+        setLiveCounts(await getLiveCounts());
+      } catch { /* the counts streamed in above still stand */ }
+      // The run just changed what is on disk, so the "last backup" column has to move with it.
+      refreshBackups();
+    }
+
+    ws.onmessage = (evt) => {
+      const msg = JSON.parse(evt.data as string) as { type: string; data?: unknown; job?: Job };
+      if (msg.type === 'counts' && msg.data) {
+        applyLiveCount(msg.data as LiveCountUpdate);
+      } else if (msg.type === 'snapshot' && msg.job) {
+        if (!isActive(msg.job.state)) settle();
+      } else if (msg.type === 'job' && msg.data) {
+        if (!isActive((msg.data as { state: JobState }).state)) settle();
+      }
+    };
+    // No error banner here: this stream only keeps the dashboard's numbers current, and the
+    // job view the user was sent to reports connection trouble already.
+    ws.onerror = () => { /* ignored */ };
+
+    return () => ws.close();
+  }, [runJobId, applyLiveCount, refreshBackups]);
 
   const value = useMemo<DashboardData>(() => ({
     status,
@@ -151,6 +228,7 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
     liveCounts,
     countLoading,
     startCounts,
+    startJob,
     backupSets,
     refreshBackups,
     selectedTargets,
@@ -159,7 +237,7 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
     setError,
   }), [
     status, statusLoading, refreshStatus,
-    liveCounts, countLoading, startCounts,
+    liveCounts, countLoading, startCounts, startJob,
     backupSets, refreshBackups,
     selectedTargets, error,
   ]);

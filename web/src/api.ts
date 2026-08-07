@@ -52,6 +52,17 @@ export interface LiveCountEntry {
   destAt?: string;
 }
 
+/**
+ * One fresh reading of one side of one target, pushed over a job's stream (`counts` event)
+ * the moment the job takes it — backups read the source, imports read the destination.
+ */
+export interface LiveCountUpdate {
+  target: string;
+  role: 'source' | 'dest';
+  count: number;
+  at: string;
+}
+
 export async function getLiveCounts(): Promise<Record<string, LiveCountEntry>> {
   return fetchJson<Record<string, LiveCountEntry>>('/api/live-counts');
 }

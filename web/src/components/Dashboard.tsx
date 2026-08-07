@@ -15,7 +15,6 @@ import {
   Check,
 } from 'lucide-react';
 import { AppConfig, BackupSet, SyncConfig, VaultStatus } from '../types.js';
-import { createJob } from '../api.js';
 import { useDashboardData } from '../state/DashboardData.js';
 import { Button } from './ui/Button.js';
 import { Card, StatCard } from './ui/Card.js';
@@ -50,6 +49,7 @@ export function Dashboard({ config, onJobCreated }: Props) {
     liveCounts,
     countLoading,
     startCounts,
+    startJob,
     backupSets,
     refreshBackups,
     selectedTargets,
@@ -126,10 +126,9 @@ export function Dashboard({ config, onJobCreated }: Props) {
     return selectedTargets.size > 0 ? [...selectedTargets] : allTargets.map((t) => t.key);
   }
 
-  async function startJob(ops: string[]) {
+  async function run(ops: string[]) {
     try {
-      const r = await createJob(effectiveTargets(), ops);
-      onJobCreated(r.jobId);
+      onJobCreated(await startJob(effectiveTargets(), ops));
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : 'Failed to create job');
     }
@@ -374,13 +373,13 @@ export function Dashboard({ config, onJobCreated }: Props) {
             </strong>
           </span>
           <div className="ml-auto flex flex-wrap items-center gap-2">
-            <Button icon={<Save />} onClick={() => startJob(['backup'])}>
+            <Button icon={<Save />} onClick={() => run(['backup'])}>
               Backup
             </Button>
-            <Button icon={<Download />} onClick={() => startJob(['import'])}>
+            <Button icon={<Download />} onClick={() => run(['import'])}>
               Import
             </Button>
-            <Button variant="primary" icon={<RotateCw />} onClick={() => startJob(['both'])}>
+            <Button variant="primary" icon={<RotateCw />} onClick={() => run(['both'])}>
               Backup + Import
             </Button>
           </div>

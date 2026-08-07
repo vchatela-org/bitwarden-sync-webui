@@ -31,6 +31,13 @@ describe('live counts persistence', () => {
     expect(counts['val']?.dest).toBeUndefined();
   });
 
+  // The runner pushes the recorded reading straight to connected clients rather than
+  // re-reading the store, so the returned stamp has to be the one that was written.
+  it('returns the timestamp it stored', () => {
+    const at = recordLiveCount('val', 'source', 42);
+    expect(getLiveCounts()['val']?.sourceAt).toBe(at);
+  });
+
   it('keeps source and dest counts independent, each with its own timestamp', () => {
     recordLiveCount('val', 'source', 42);
     recordLiveCount('val', 'dest', 40);
