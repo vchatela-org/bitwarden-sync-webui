@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Ban, AlertCircle, X, Minus, Plus, GitCompareArrows, ShieldCheck, ShieldAlert } from 'lucide-react';
-import { Job, Prompt, CredentialPrompt, ConfirmationPrompt, Step, LogLine, DiffItem, SecureDiffResult } from '../types.js';
+import { Job, Prompt, CredentialPrompt, ConfirmationPrompt, Step, LogLine, DiffItem, CredentialDiffItem, SecureDiffResult } from '../types.js';
 import { getJob, cancelJob, openJobStream } from '../api.js';
 import { StepGraph } from './StepGraph.js';
 import { Terminal } from './Terminal.js';
@@ -216,6 +216,14 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
 
 const ITEM_TYPE: Record<number, string> = { 1: 'Login', 2: 'Note', 3: 'Card', 4: 'Identity' };
 
+const REASON_LABEL: Record<string, string> = {
+  password: 'password',
+  totp: 'TOTP',
+  notes: 'notes',
+  fields: 'hidden fields',
+  card: 'card details',
+};
+
 function DiffSection({ title, items, tone, masked }: {
   title: string;
   items: DiffItem[];
@@ -233,15 +241,23 @@ function DiffSection({ title, items, tone, masked }: {
         {title} ({items.length})
       </p>
       <ul className="space-y-0.5">
-        {items.map((item, i) => (
-          <li key={i} className="flex items-center gap-2 rounded px-2 py-0.5 text-[12px] text-fg-muted hover:bg-surface-2">
-            <span className="font-mono text-[10px] text-fg-faint w-10 shrink-0">{ITEM_TYPE[item.type] ?? `#${item.type}`}</span>
-            <span className="truncate">{masked ? '••••••' : item.name}</span>
-            {item.username && (
-              <span className="truncate text-fg-subtle text-[11px]">{masked ? '••' : item.username}</span>
-            )}
-          </li>
-        ))}
+        {items.map((item, i) => {
+          const reasons = (item as CredentialDiffItem).reasons;
+          return (
+            <li key={i} className="flex items-center gap-2 rounded px-2 py-0.5 text-[12px] text-fg-muted hover:bg-surface-2">
+              <span className="font-mono text-[10px] text-fg-faint w-10 shrink-0">{ITEM_TYPE[item.type] ?? `#${item.type}`}</span>
+              <span className="truncate">{masked ? '••••••' : item.name}</span>
+              {item.username && (
+                <span className="truncate text-fg-subtle text-[11px]">{masked ? '••' : item.username}</span>
+              )}
+              {reasons && reasons.length > 0 && (
+                <span className="ml-auto shrink-0 text-[10px] text-yellow-500/80">
+                  {reasons.map((r) => REASON_LABEL[r] ?? r).join(', ')}
+                </span>
+              )}
+            </li>
+          );
+        })}
       </ul>
     </div>
   );

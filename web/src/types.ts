@@ -38,13 +38,19 @@ export interface DiffResult {
   guardReason?: string;
 }
 
+export type CredentialDiffReason = 'password' | 'totp' | 'notes' | 'fields' | 'card';
+
+export interface CredentialDiffItem extends DiffItem {
+  reasons: CredentialDiffReason[];
+}
+
 /** Result of a secure (hashed) credential diff between source and destination vaults. */
 export interface SecureDiffResult {
   sourceCount: number;
   destCount: number;
   onlyInSource: DiffItem[];
   onlyInDest: DiffItem[];
-  credentialsDiffer: DiffItem[];
+  credentialsDiffer: CredentialDiffItem[];
   identical: number;
 }
 

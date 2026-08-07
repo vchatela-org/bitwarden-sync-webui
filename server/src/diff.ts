@@ -177,6 +177,14 @@ export function evaluateGuard(
 // Operates entirely on hashed credential data — no clear-text password or secret
 // field ever leaves this function or appears in logs/results.
 
+/** Which credential categories differ between source and destination for one item. */
+export type CredentialDiffReason = 'password' | 'totp' | 'notes' | 'fields' | 'card';
+
+export interface CredentialDiffItem extends DiffItem {
+  /** The credential categories that differ — never contains any actual credential value. */
+  reasons: CredentialDiffReason[];
+}
+
 export interface SecureDiffResult {
   sourceCount: number;
   destCount: number;
@@ -184,89 +192,83 @@ export interface SecureDiffResult {
   onlyInSource: DiffItem[];
   /** Items present in destination but absent from source. */
   onlyInDest: DiffItem[];
-  /** Items present on both sides but whose credential hash differs. */
-  credentialsDiffer: DiffItem[];
-  /** Items present on both sides with identical credential hash. */
+  /** Items present on both sides but with at least one credential category that differs. */
+  credentialsDiffer: CredentialDiffItem[];
+  /** Items present on both sides with identical credential hashes across all categories. */
   identical: number;
 }
 
-/**
- * Builds a SHA-256 digest of all credential-sensitive fields in a vault item.
- * The output is a fixed-length hex string — safe to compare, safe to log or store.
- * The input item is never mutated and no field value is returned to the caller.
- */
-function hashCredentials(item: Record<string, unknown>): string {
-  const h = createHash('sha256');
+/** Per-category SHA-256 digests for one vault item. Only hashes leave this function. */
+interface CredentialHashes {
+  password: string;
+  totp: string;
+  notes: string;
+  fields: string;
+  card: string;
+}
 
-  // Login credentials
+function hashCredentials(item: Record<string, unknown>): CredentialHashes {
   const login = item['login'] as Record<string, unknown> | null | undefined;
-  if (login) {
-    h.update('password:');
-    h.update(String(login['password'] ?? ''));
-    h.update('\ntotp:');
-    h.update(String(login['totp'] ?? ''));
-  }
-
-  // Card credentials
   const card = item['card'] as Record<string, unknown> | null | undefined;
-  if (card) {
-    h.update('\ncard.number:');
-    h.update(String(card['number'] ?? ''));
-    h.update('\ncard.code:');
-    h.update(String(card['code'] ?? ''));
-  }
-
-  // Secure note / shared notes field
-  h.update('\nnotes:');
-  h.update(String(item['notes'] ?? ''));
-
-  // Custom fields — type 1 = hidden (password-like), type 0 = text, type 2 = boolean
   const fields = item['fields'] as Array<Record<string, unknown>> | null | undefined;
-  if (Array.isArray(fields)) {
-    for (const f of fields) {
-      h.update(`\nfield:${String(f['name'] ?? '')}:${String(f['value'] ?? '')}`);
-    }
-  }
 
-  return h.digest('hex');
+  const h = (value: string) => createHash('sha256').update(value).digest('hex');
+
+  // Each category hashed independently so the diff can name what changed.
+  const passwordHash = h(String(login?.['password'] ?? ''));
+  const totpHash = h(String(login?.['totp'] ?? ''));
+  const notesHash = h(String(item['notes'] ?? ''));
+
+  // Only hash hidden (type=1) custom fields — text fields are not credentials.
+  const hiddenFields = Array.isArray(fields)
+    ? fields.filter((f) => f['type'] === 1)
+    : [];
+  const fieldsHash = h(hiddenFields.map((f) => `${String(f['name'] ?? '')}:${String(f['value'] ?? '')}`).join('\n'));
+
+  const cardHash = h(`${String(card?.['number'] ?? '')}:${String(card?.['code'] ?? '')}`);
+
+  return { password: passwordHash, totp: totpHash, notes: notesHash, fields: fieldsHash, card: cardHash };
 }
 
 /**
  * Compares two full vault listings (raw `bw list items` output) without ever
- * exposing credential values. Sensitive fields are hashed immediately; only the
- * hash is retained for comparison. The lists are discarded after this call.
+ * exposing credential values. Sensitive fields are hashed immediately per category;
+ * only the hashes are retained for comparison. The lists are discarded after this call.
  */
 export function computeSecureDiff(
   sourceItems: Array<Record<string, unknown>>,
   destItems: Array<Record<string, unknown>>,
 ): SecureDiffResult {
-  // Build identity→hash maps for each side
-  const srcMap = new Map<string, { item: DiffItem; hash: string }>();
+  const srcMap = new Map<string, { item: DiffItem; hashes: CredentialHashes }>();
   for (const raw of sourceItems) {
     const item = toDiffItem(raw);
-    const key = toTuple(item);
-    // If the same key appears twice (duplicate names), last write wins — consistent
-    // with how import treats duplicates.
-    srcMap.set(key, { item, hash: hashCredentials(raw) });
+    srcMap.set(toTuple(item), { item, hashes: hashCredentials(raw) });
   }
 
-  const dstMap = new Map<string, { item: DiffItem; hash: string }>();
+  const dstMap = new Map<string, { item: DiffItem; hashes: CredentialHashes }>();
   for (const raw of destItems) {
     const item = toDiffItem(raw);
-    const key = toTuple(item);
-    dstMap.set(key, { item, hash: hashCredentials(raw) });
+    dstMap.set(toTuple(item), { item, hashes: hashCredentials(raw) });
   }
 
   const onlyInSource: DiffItem[] = [];
-  const credentialsDiffer: DiffItem[] = [];
+  const credentialsDiffer: CredentialDiffItem[] = [];
   let identical = 0;
 
   for (const [key, src] of srcMap) {
     const dst = dstMap.get(key);
     if (!dst) {
       onlyInSource.push(src.item);
-    } else if (src.hash !== dst.hash) {
-      credentialsDiffer.push(src.item);
+      continue;
+    }
+    const reasons: CredentialDiffReason[] = [];
+    if (src.hashes.password !== dst.hashes.password) reasons.push('password');
+    if (src.hashes.totp !== dst.hashes.totp) reasons.push('totp');
+    if (src.hashes.notes !== dst.hashes.notes) reasons.push('notes');
+    if (src.hashes.fields !== dst.hashes.fields) reasons.push('fields');
+    if (src.hashes.card !== dst.hashes.card) reasons.push('card');
+    if (reasons.length > 0) {
+      credentialsDiffer.push({ ...src.item, reasons });
     } else {
       identical++;
     }
@@ -274,17 +276,8 @@ export function computeSecureDiff(
 
   const onlyInDest: DiffItem[] = [];
   for (const [key, dst] of dstMap) {
-    if (!srcMap.has(key)) {
-      onlyInDest.push(dst.item);
-    }
+    if (!srcMap.has(key)) onlyInDest.push(dst.item);
   }
 
-  return {
-    sourceCount: srcMap.size,
-    destCount: dstMap.size,
-    onlyInSource,
-    onlyInDest,
-    credentialsDiffer,
-    identical,
-  };
+  return { sourceCount: srcMap.size, destCount: dstMap.size, onlyInSource, onlyInDest, credentialsDiffer, identical };
 }

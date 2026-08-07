@@ -1216,7 +1216,14 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
               const diffParts: string[] = [];
               if (result.onlyInSource.length > 0) diffParts.push(`${result.onlyInSource.length} only in source`);
               if (result.onlyInDest.length > 0) diffParts.push(`${result.onlyInDest.length} only in dest`);
-              if (result.credentialsDiffer.length > 0) diffParts.push(`${result.credentialsDiffer.length} credential mismatch`);
+              if (result.credentialsDiffer.length > 0) {
+                const byReason = new Map<string, number>();
+                for (const item of result.credentialsDiffer) {
+                  for (const r of item.reasons) byReason.set(r, (byReason.get(r) ?? 0) + 1);
+                }
+                const reasonSummary = [...byReason.entries()].map(([r, n]) => `${n}×${r}`).join(', ');
+                diffParts.push(`${result.credentialsDiffer.length} credential mismatch (${reasonSummary})`);
+              }
               const summary = diffParts.length > 0 ? diffParts.join(', ') : 'vaults are identical';
               addLog(job, 'app', `🔍 [${target}] Diff: ${summary} (${result.identical} identical)`);
 
