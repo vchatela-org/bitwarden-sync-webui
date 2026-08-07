@@ -61,15 +61,15 @@ async function main() {
     const browser = await chromium.launch();
     const page = await browser.newPage({ viewport: { width: 1440, height: 900 } });
 
+    // Set up the live-counts listener before navigation so we don't miss the
+    // response that fires automatically on mount.
+    const liveCountsDone = page.waitForResponse((r) => r.url().endsWith('/api/live-counts'));
     await page.goto(BASE_URL, { waitUntil: 'domcontentloaded' });
 
     // ── Dashboard ──────────────────────────────────────────────────────────
     await page.getByRole('table').waitFor();
-    await Promise.all([
-      page.waitForResponse((r) => r.url().endsWith('/api/status')),
-      page.getByRole('button', { name: 'Vault status' }).click(),
-    ]);
-    await page.waitForTimeout(300); // let the freshly-loaded status render
+    await liveCountsDone;
+    await page.waitForTimeout(200);
     await shoot(page, '01-dashboard.jpg');
 
     // ── Jobs: list ─────────────────────────────────────────────────────────

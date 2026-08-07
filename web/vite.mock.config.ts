@@ -158,6 +158,16 @@ const jobs = [
 const aliceCloud = { status: 'unlocked', serverUrl: config.vaults[0]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 3_600_000).toISOString() };
 const aliceHome = { status: 'locked', serverUrl: config.vaults[1]!.serverUrl, userEmail: 'alice@home.lan', lastSync: new Date(Date.now() - 90_000_000).toISOString() };
 
+const hAgo = (h: number) => new Date(Date.now() - h * 3_600_000).toISOString();
+const liveCounts = {
+  alice:          { source: 412, sourceAt: hAgo(1.2), dest: 411, destAt: hAgo(1.2) },
+  'alice-offsite': { source: 412, sourceAt: hAgo(1.3), dest: 411, destAt: hAgo(1.3) },
+  'acme-org':     { source: 874, sourceAt: hAgo(1.1), dest: 871, destAt: hAgo(1.1) },
+  'side-project': { source: 64,  sourceAt: hAgo(1.4), dest: 63,  destAt: hAgo(1.4) },
+  bob:            { source: 188, sourceAt: hAgo(2.1), dest: 188, destAt: hAgo(2.1) },
+  'bob-org':      { source: 44,  sourceAt: hAgo(2.1), dest: 44,  destAt: hAgo(2.1) },
+};
+
 const status = {
   alice: { source: aliceCloud, dest: aliceHome },
   'alice-offsite': {
@@ -211,6 +221,7 @@ function mockApi(): { name: string; configureServer: (s: { middlewares: Connect.
         if (url === '/auth/logout') return send({ ok: true });
         if (url === '/config') return send(config);
         if (url === '/status') return send(status);
+        if (url === '/live-counts') return send(liveCounts);
         if (url === '/backups') return send(backups);
         if (url === '/backups/verify') {
           return send({
