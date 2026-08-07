@@ -1,71 +1,71 @@
 import { describe, it, expect } from 'vitest';
-import { planCollectionMerge, BwCollection } from '../src/collections.js';
+import { planStaleCollections, BwCollection } from '../src/collections.js';
 
 function col(id: string, name: string): BwCollection {
   return { id, name, organizationId: 'org1' };
 }
 
-describe('planCollectionMerge', () => {
-  it('returns empty plan when importer reused originals (no new collections)', () => {
+describe('planStaleCollections', () => {
+  it('returns an empty plan when the importer created nothing new', () => {
     const cols = [col('a', 'Family'), col('b', 'Work')];
-    const preIds = ['a', 'b'];
-    expect(planCollectionMerge(cols, preIds)).toHaveLength(0);
+    expect(planStaleCollections(cols, ['a', 'b'])).toHaveLength(0);
   });
 
-  it('plans a merge when importer created a duplicate same-named collection', () => {
+  it('plans removal of the pre-import collection the importer superseded', () => {
     const cols = [
-      col('orig-a', 'Family'), // pre-existing, permissioned
-      col('dup-a', 'Family'),  // created by importer (duplicate)
+      col('orig-a', 'Family'), // pre-existing, emptied by the purge
+      col('new-a', 'Family'),  // created by the importer, holds this run's items
     ];
-    const preIds = ['orig-a'];
-    const plan = planCollectionMerge(cols, preIds);
+    const plan = planStaleCollections(cols, ['orig-a']);
     expect(plan).toHaveLength(1);
-    expect(plan[0]).toMatchObject({ duplicateId: 'dup-a', originalId: 'orig-a', name: 'Family' });
+    expect(plan[0]).toMatchObject({ staleId: 'orig-a', replacementId: 'new-a', name: 'Family' });
   });
 
-  it('leaves genuinely new collections alone (no matching original)', () => {
+  it('leaves a pre-import collection the export does not cover', () => {
     const cols = [
       col('orig-a', 'Family'),
-      col('new-b', 'New Collection'), // truly new, no pre-existing match
+      col('orig-default', 'Default collection'), // no replacement — export has no such items
+      col('new-a', 'Family'),
     ];
-    const preIds = ['orig-a'];
-    const plan = planCollectionMerge(cols, preIds);
-    expect(plan).toHaveLength(0); // new-b has no original to merge into
+    const plan = planStaleCollections(cols, ['orig-a', 'orig-default']);
+    expect(plan).toHaveLength(1);
+    expect(plan[0]!.staleId).toBe('orig-a');
+  });
+
+  it('never plans removal of a collection the importer created', () => {
+    const cols = [col('orig-a', 'Family'), col('new-a', 'Family'), col('new-b', 'Brand New')];
+    const plan = planStaleCollections(cols, ['orig-a']);
+    expect(plan.map((p) => p.staleId)).toEqual(['orig-a']);
   });
 
   it('is case-insensitive for name matching', () => {
-    const cols = [
-      col('orig', 'FAMILY'),
-      col('dup', 'family'),
-    ];
-    const preIds = ['orig'];
-    const plan = planCollectionMerge(cols, preIds);
+    const cols = [col('orig', 'FAMILY'), col('new', 'family')];
+    const plan = planStaleCollections(cols, ['orig']);
     expect(plan).toHaveLength(1);
-    expect(plan[0]!.duplicateId).toBe('dup');
-    expect(plan[0]!.originalId).toBe('orig');
+    expect(plan[0]!.staleId).toBe('orig');
+    expect(plan[0]!.replacementId).toBe('new');
   });
 
-  it('handles multiple duplicates', () => {
+  it('handles multiple superseded collections', () => {
     const cols = [
       col('orig-a', 'Alpha'),
       col('orig-b', 'Beta'),
-      col('dup-a', 'Alpha'),
-      col('dup-b', 'Beta'),
+      col('new-a', 'Alpha'),
+      col('new-b', 'Beta'),
     ];
-    const preIds = ['orig-a', 'orig-b'];
-    const plan = planCollectionMerge(cols, preIds);
-    expect(plan).toHaveLength(2);
-    const dupIds = plan.map((p) => p.duplicateId).sort();
-    expect(dupIds).toEqual(['dup-a', 'dup-b'].sort());
+    const plan = planStaleCollections(cols, ['orig-a', 'orig-b']);
+    expect(plan.map((p) => p.staleId).sort()).toEqual(['orig-a', 'orig-b']);
   });
 
-  it('ignores a duplicate if its name has no pre-existing match', () => {
-    const cols = [
-      col('orig-a', 'Alpha'),
-      col('new-c', 'Gamma'), // new name, no original
-    ];
-    const preIds = ['orig-a'];
-    const plan = planCollectionMerge(cols, preIds);
-    expect(plan).toHaveLength(0);
+  it('plans both when the destination already held two same-named collections', () => {
+    const cols = [col('orig-a1', 'Alpha'), col('orig-a2', 'Alpha'), col('new-a', 'Alpha')];
+    const plan = planStaleCollections(cols, ['orig-a1', 'orig-a2']);
+    expect(plan.map((p) => p.staleId).sort()).toEqual(['orig-a1', 'orig-a2']);
+    expect(plan.every((p) => p.replacementId === 'new-a')).toBe(true);
+  });
+
+  it('plans nothing when the import produced no collections at all', () => {
+    const cols = [col('orig-a', 'Alpha'), col('orig-b', 'Beta')];
+    expect(planStaleCollections(cols, ['orig-a', 'orig-b'])).toHaveLength(0);
   });
 });

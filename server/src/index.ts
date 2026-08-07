@@ -1,6 +1,7 @@
 import { createApp } from './api.js';
 import { loadConfig } from './config.js';
 import { assertCliVersion } from './bwCli.js';
+import { migrateLegacyBackupNames } from './backups.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const CONFIG_PATH = process.env['CONFIG_PATH'];
@@ -19,6 +20,10 @@ async function main(): Promise<void> {
       `[startup] Config loaded: ${vaults.length} vaults, ${accounts.length} accounts, ` +
       `${syncs.length} syncs, ${orgs.length} orgs`,
     );
+
+    // Backups written before v1.6.2 have a stray '.' in their filenames and don't parse;
+    // rename them so they show up managed and their item counts stay readable.
+    migrateLegacyBackupNames(configResult.config.backupFolder, (msg) => console.log(msg));
   }
 
   // Boot-time CLI version assertion (non-fatal)

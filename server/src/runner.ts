@@ -16,7 +16,7 @@ import {
 import { bwInit, lockProfile, logoutProfile, listItems, listOrgCollections, InitResult } from './session.js';
 import { cachePassword, getPassword, clearAllPasswords } from './secrets.js';
 import { purgeVault } from './purge.js';
-import { dedupeOrgCollections } from './collections.js';
+import { reconcileOrgCollections } from './collections.js';
 import { computeDiff, evaluateGuard, toDiffItem, DiffResult, DiffItem } from './diff.js';
 import { findNewestExport, countExportItems, BackupMeta, buildBackupFilename } from './backups.js';
 import { runBw, LogCallback, getCliVersion } from './bwCli.js';
@@ -27,7 +27,6 @@ import { statSync } from 'fs';
 
 export type JobOperation = 'backup' | 'import' | 'both' | 'status' | 'diff' | 'count';
 export type JobState = 'queued' | 'running' | 'awaiting-credentials' | 'awaiting-confirmation' | 'succeeded' | 'failed' | 'partial' | 'aborted';
-// Use a separate variable to track aborted state at runtime (the type above does include 'aborted')
 export type StepState = 'pending' | 'running' | 'succeeded' | 'failed' | 'skipped' | 'warning' | 'awaiting-input';
 
 /** Job states the runner can still move out of on its own — can be cancelled, can't be deleted. */
@@ -172,6 +171,7 @@ export function loadPersistedJobs(): void {
 const currentStep = new Map<string, string>();
 
 const TERMINAL_STEP_STATES = ['succeeded', 'failed', 'skipped', 'warning'];
+const TERMINAL_JOB_STATES: JobState[] = ['succeeded', 'failed', 'partial', 'aborted'];
 
 function addLog(job: Job, stream: 'stdout' | 'stderr' | 'app', line: string, step?: string): void {
   const entry: LogLine = {
@@ -184,7 +184,7 @@ function addLog(job: Job, stream: 'stdout' | 'stderr' | 'app', line: string, ste
   emit(job.id, 'log', entry);
 }
 
-function updateStep(job: Job, stepId: string, update: Partial<Step>): void {
+function applyStep(job: Job, stepId: string, update: Partial<Step>): void {
   const step = job.steps.find((s) => s.id === stepId);
   if (!step) return;
   Object.assign(step, update);
@@ -201,7 +201,27 @@ function updateStep(job: Job, stepId: string, update: Partial<Step>): void {
   emit(job.id, 'step', step);
 }
 
-const TERMINAL_JOB_STATES: JobState[] = ['succeeded', 'failed', 'partial', 'aborted'];
+function updateStep(job: Job, stepId: string, update: Partial<Step>): void {
+  // Cancellation settles every unfinished step at once, but the work itself only unwinds at
+  // the next checkpoint. Until it does, its in-flight `bw` calls keep reporting results —
+  // ignore them, or a cancelled job's step list drifts back to running/succeeded and the UI
+  // shows spinners under an "Aborted" badge.
+  if (TERMINAL_JOB_STATES.includes(job.state)) return;
+  applyStep(job, stepId, update);
+}
+
+/**
+ * Settles every step that hasn't finished, for a job that is going no further. Bypasses the
+ * terminal-state guard in updateStep — this is the call that establishes that final state.
+ */
+function markRemainingSkipped(job: Job, detail: string): void {
+  for (const step of job.steps) {
+    if (step.state === 'pending' || step.state === 'running' || step.state === 'awaiting-input') {
+      applyStep(job, step.id, { state: 'skipped', detail });
+    }
+  }
+  currentStep.delete(job.id);
+}
 
 function updateJobState(job: Job, state: JobState): void {
   // Never transition out of a terminal state — once a job is aborted, succeeded,
@@ -297,7 +317,7 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
           steps.push({ id: `${g}:import:${t}:run`, label: `[${t}] Import`, state: 'pending', group: g });
           steps.push({ id: `${g}:import:${t}:verify`, label: `[${t}] Verify import`, state: 'pending', group: g });
           if (syncByKey(config, t).org) {
-            steps.push({ id: `${g}:import:${t}:dedupe`, label: `[${t}] Dedupe org collections`, state: 'pending', group: g });
+            steps.push({ id: `${g}:import:${t}:reconcile`, label: `[${t}] Reconcile org collections`, state: 'pending', group: g });
           }
         }
         steps.push({ id: `${g}:import:${d}:lock`, label: `[${d}] ${vaultName} lock`, state: 'pending', group: g });
@@ -375,6 +395,10 @@ export function cancelJob(jobId: string): boolean {
   const job = jobs.get(jobId);
   if (!job) return false;
   if (!ACTIVE_JOB_STATES.includes(job.state)) return false;
+  // Settle the steps first: markRemainingSkipped has to run while the job is still active,
+  // and it is what stops the UI spinning the moment Cancel is pressed. The runner keeps
+  // going until its next checkpoint, but updateStep ignores it from here on.
+  markRemainingSkipped(job, 'Cancelled');
   updateJobState(job, 'aborted');
   clearPrompt(job);
   // Wake any pending resolvers
@@ -566,6 +590,14 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
   const backupFailed = new Set<string>();
   let anyFailed = false;
 
+  /**
+   * Cancellation is cooperative: cancelJob() flips the state, and the phases below unwind at
+   * the next call to this. Nothing interrupts an in-flight `bw` child — a half-written
+   * `import` or `edit item` would leave the destination vault in a state no later run could
+   * reason about — so the worst-case wait is one command's timeout.
+   */
+  const aborted = (): boolean => (job.state as string) === 'aborted';
+
   /** Marks every still-unfinished step matching a prefix, e.g. after a login failure. */
   const skipPending = (prefix: string, detail: string): void => {
     for (const s of job.steps) {
@@ -579,12 +611,15 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
     // One iteration per source account: a single `bw login` on the source side, covering that
     // account's personal sync plus any org syncs exported through it.
     for (const [srcAccount, groupSyncs] of groupSyncsByAccount(job.targets, config, 'from')) {
-      if ((job.state as string) === 'aborted') break;
+      if (aborted()) break;
       const srcCfg = accountByKey(config, srcAccount);
       const srcVault = vaultOfAccount(config, srcAccount);
       addLog(job, 'app', `\n====== ${srcAccount} (${srcCfg.email}) on ${srcVault.name} — syncs: ${groupSyncs.join(', ')} ======`);
 
-      const ts = new Date().toISOString().replace(/[-T:]/g, '').slice(0, 15).replace(/(\d{8})(\d{6})/, '$1_$2');
+      // 14 chars, not 15: '2026-08-07T12:24:05.420Z' → '20260807122405' → '20260807_122405'.
+      // Slicing 15 kept the '.' before the milliseconds, and the trailing dot it left in
+      // every filename made parseBackupFilename reject the whole set.
+      const ts = new Date().toISOString().replace(/[-T:]/g, '').slice(0, 14).replace(/(\d{8})(\d{6})/, '$1_$2');
 
       // ─── BACKUP PHASE ──────────────────────────────────────────────────────
       if (doBackup) {
@@ -616,7 +651,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           updateStep(job, `${srcAccount}:backup:sync`, { state: 'succeeded' });
 
           for (const target of groupSyncs) {
-            if ((job.state as string) === 'aborted') break;
+            if (aborted()) break;
             const sync = syncByKey(config, target);
             const isOrg = !!sync.org;
             const orgId = syncOrgId(config, sync, srcVault.key);
@@ -710,9 +745,9 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
       // ─── IMPORT PHASE ──────────────────────────────────────────────────────
       // The destination side can fan out: two syncs sharing a source account may target
       // different destination accounts, each needing its own login.
-      if (doImport && (job.state as string) !== 'aborted') {
+      if (doImport && !aborted()) {
         for (const [destAccount, dSyncs] of groupSyncsByAccount(groupSyncs, config, 'to')) {
-          if ((job.state as string) === 'aborted') break;
+          if (aborted()) break;
           const destCfg = accountByKey(config, destAccount);
           const destVault = vaultOfAccount(config, destAccount);
 
@@ -741,7 +776,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           updateStep(job, `${srcAccount}:import:${destAccount}:sync`, { state: 'succeeded' });
 
           for (const target of dSyncs) {
-            if ((job.state as string) === 'aborted') break;
+            if (aborted()) break;
             const sync = syncByKey(config, target);
             const isOrg = !!sync.org;
             const destOrgId = syncOrgId(config, sync, destVault.key);
@@ -826,7 +861,11 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
               updateStep(job, diffId, { state: 'warning', detail: String(err) });
             }
 
-            if ((job.state as string) === 'aborted') break;
+            // Last point at which cancelling is free. Everything from the purge to the
+            // verify below is one destructive unit — stopping between them would leave the
+            // destination emptied with nothing imported back into it — so a cancel arriving
+            // after this line is honoured only once that unit has run to completion.
+            if (aborted()) break;
 
             // Purge
             const purgeId = `${srcAccount}:import:${target}:purge`;
@@ -888,25 +927,26 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             addLog(job, 'app', `📊 Items imported for ${target}: ${verifyCount}`);
             updateStep(job, verifyId, { state: 'succeeded', detail: `${verifyCount} items` });
 
-            // Dedupe collections (org only)
-            if (isOrg) {
-              const dedupeId = `${srcAccount}:import:${target}:dedupe`;
-              updateStep(job, dedupeId, { state: 'running' });
+            // Reconcile collections (org only)
+            if (isOrg && !aborted()) {
+              const reconcileId = `${srcAccount}:import:${target}:reconcile`;
+              updateStep(job, reconcileId, { state: 'running' });
               try {
-                const dedupeResult = await dedupeOrgCollections({
+                const reconciled = await reconcileOrgCollections({
                   profileDir: vaultDir,
                   sessionKey: session,
                   orgId: destOrgId!,
                   preImportIds,
                   log,
+                  shouldAbort: aborted,
                 });
-                if (dedupeResult.needsReview > 0) {
-                  updateStep(job, dedupeId, { state: 'warning', detail: `${dedupeResult.needsReview} need review` });
+                if (reconciled.needsReview > 0) {
+                  updateStep(job, reconcileId, { state: 'warning', detail: `${reconciled.needsReview} need review` });
                 } else {
-                  updateStep(job, dedupeId, { state: 'succeeded', detail: `${dedupeResult.merged} merged` });
+                  updateStep(job, reconcileId, { state: 'succeeded', detail: `${reconciled.removed} removed` });
                 }
               } catch (err: unknown) {
-                updateStep(job, dedupeId, { state: 'warning', detail: String(err) });
+                updateStep(job, reconcileId, { state: 'warning', detail: String(err) });
               }
             }
           }
@@ -926,14 +966,14 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
       }
 
       // ─── COUNT PHASE (live item counts, no export) ─────────────────────────
-      if (doCount && (job.state as string) !== 'aborted') {
+      if (doCount && !aborted()) {
         job.results = job.results ?? {};
 
         for (const role of ['source', 'dest'] as const) {
-          if ((job.state as string) === 'aborted') break;
+          if (aborted()) break;
           const byAccount = groupSyncsByAccount(groupSyncs, config, role === 'source' ? 'from' : 'to');
           for (const [account, aSyncs] of byAccount) {
-            if ((job.state as string) === 'aborted') break;
+            if (aborted()) break;
             const vault = vaultOfAccount(config, account);
 
             const loginStepId = `${srcAccount}:count:${role}:${account}:login`;
@@ -966,7 +1006,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateStep(job, `${srcAccount}:count:${role}:${account}:sync`, { state: 'succeeded' });
 
             for (const target of aSyncs) {
-              if ((job.state as string) === 'aborted') break;
+              if (aborted()) break;
               const sync = syncByKey(config, target);
               const isOrg = !!sync.org;
               const orgId = syncOrgId(config, sync, vault.key);
@@ -996,7 +1036,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
 
     clearAllPasswords();
     clearAllSecrets();
-    if ((job.state as string) === 'aborted') {
+    if (aborted()) {
       // state already set
     } else if (anyFailed) {
       updateJobState(job, 'partial');
@@ -1009,6 +1049,15 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
     clearAllSecrets();
     updateJobState(job, 'failed');
   } finally {
+    // A job that stopped early — cancelled, or thrown out of mid-phase — leaves steps it
+    // never reached sitting at 'pending', and the one it died inside at 'running'. Settle
+    // them so a finished job never shows work still in progress. A clean run has nothing
+    // left to settle, so this is a no-op there.
+    let stoppedBecause = 'Job ended before this step ran';
+    if (aborted()) stoppedBecause = 'Job cancelled';
+    else if (job.state === 'failed') stoppedBecause = 'Job failed';
+    markRemainingSkipped(job, stoppedBecause);
+
     currentStep.delete(job.id);
     persistJob(job);
     activeJobId = null;

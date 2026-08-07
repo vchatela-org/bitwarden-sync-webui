@@ -1,4 +1,4 @@
-import { readdirSync, readFileSync, unlinkSync, openSync, fstatSync, closeSync } from 'fs';
+import { readdirSync, readFileSync, writeFileSync, renameSync, unlinkSync, openSync, fstatSync, closeSync } from 'fs';
 import { resolve, join, dirname, basename } from 'path';
 import { createHash } from 'crypto';
 import { deriveCounts, flushCountCache, pruneCountCache } from './backupCounts.js';
@@ -90,6 +90,98 @@ export function parseBackupFilename(
   }
 
   return null;
+}
+
+// Backups written before v1.6.2 carry a stray '.' at the end of their timestamp: the
+// builder sliced 15 characters off the ISO string instead of 14, taking the '.' that
+// separates seconds from milliseconds along with them. That produced names like
+// `bitwarden_export_val_20260807_122405._encrypted.json` (and `..meta.json` sidecars),
+// which none of the REs above match — so those sets showed up as unmanaged and their
+// item counts were unreadable. migrateLegacyBackupNames() renames them on startup.
+const LEGACY_FILE_RE =
+  /^(bitwarden(?:_org)?_export_[^_]+(?:_[^_]+)*_\d{8}_\d{6})\._(encrypted(?:_pass)?)\.json$/;
+const LEGACY_META_RE =
+  /^(bitwarden(?:_org)?_export_[^_]+(?:_[^_]+)*_\d{8}_\d{6})\.\.meta\.json$/;
+
+/** The corrected name for a pre-v1.6.2 backup file, or null if the name is already valid. */
+export function correctedBackupFilename(filename: string): string | null {
+  const file = filename.match(LEGACY_FILE_RE);
+  if (file) return `${file[1]}_${file[2]}.json`;
+
+  const meta = filename.match(LEGACY_META_RE);
+  if (meta) return `${meta[1]}.meta.json`;
+
+  return null;
+}
+
+export interface MigrationResult {
+  renamed: number;
+  skipped: number;
+}
+
+/**
+ * Renames pre-v1.6.2 backup files in place and rewrites the `timestamp`/`exportFile` fields
+ * inside sidecars so they keep pointing at the file they describe — `checkIntegrity` matches
+ * on `exportFile`, and would silently stop verifying a set's hash if it went stale.
+ *
+ * Never overwrites: if the corrected name is already taken, the legacy file is left alone.
+ */
+export function migrateLegacyBackupNames(
+  backupFolder: string,
+  log: (msg: string) => void = () => {},
+): MigrationResult {
+  let files: string[];
+  try {
+    files = readdirSync(backupFolder);
+  } catch {
+    return { renamed: 0, skipped: 0 };
+  }
+
+  const existing = new Set(files);
+  let renamed = 0;
+  let skipped = 0;
+
+  for (const filename of files) {
+    const corrected = correctedBackupFilename(filename);
+    if (!corrected) continue;
+
+    if (existing.has(corrected)) {
+      log(`[backups] Skipping rename of ${filename}: ${corrected} already exists`);
+      skipped++;
+      continue;
+    }
+
+    try {
+      renameSync(join(backupFolder, filename), join(backupFolder, corrected));
+      existing.add(corrected);
+      renamed++;
+    } catch (err: unknown) {
+      log(`[backups] Failed to rename ${filename}: ${err}`);
+      skipped++;
+      continue;
+    }
+
+    if (!corrected.endsWith('.meta.json')) continue;
+    try {
+      const metaPath = join(backupFolder, corrected);
+      const meta = JSON.parse(readFileSync(metaPath, 'utf-8')) as BackupMeta;
+      const fixedTimestamp = meta.timestamp?.replace(/\.$/, '');
+      const fixedExport = meta.exportFile ? correctedBackupFilename(meta.exportFile) : null;
+      if (fixedTimestamp === meta.timestamp && !fixedExport) continue;
+      writeFileSync(metaPath, JSON.stringify({
+        ...meta,
+        ...(fixedTimestamp !== undefined ? { timestamp: fixedTimestamp } : {}),
+        ...(fixedExport ? { exportFile: fixedExport } : {}),
+      }, null, 2));
+    } catch (err: unknown) {
+      log(`[backups] Renamed ${corrected} but could not rewrite its contents: ${err}`);
+    }
+  }
+
+  if (renamed > 0 || skipped > 0) {
+    log(`[backups] Legacy filename migration: ${renamed} renamed, ${skipped} skipped`);
+  }
+  return { renamed, skipped };
 }
 
 export function buildBackupFilename(

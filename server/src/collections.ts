@@ -7,159 +7,156 @@ export interface BwCollection {
   organizationId: string;
 }
 
-export interface BwItem {
-  id: string;
-  collectionIds: string[];
-  organizationId?: string;
-}
-
-export interface MergePlan {
-  duplicateId: string;
-  originalId: string;
+export interface StaleCollection {
+  /** Pre-existing collection, emptied by the purge and superseded by the import. */
+  staleId: string;
+  /** Same-named collection the importer just created, holding this run's items. */
+  replacementId: string;
   name: string;
 }
 
-/** Pure planner: given current collections and pre-import ids, produce a merge plan */
-export function planCollectionMerge(
+/**
+ * Pure planner: which pre-import collections the import has superseded.
+ *
+ * The import phase purges the destination org before importing, and the purge API clears
+ * ciphers but leaves collections standing. `bw import` never reuses a collection by name,
+ * so every collection in the export comes back as a second, freshly-created one holding all
+ * the items, next to the emptied original. Those originals are what this plans to remove.
+ *
+ * A pre-import collection with no same-named replacement is left alone — it is a collection
+ * the export simply doesn't cover (an org's `Default collection`, typically), not a leftover.
+ */
+export function planStaleCollections(
   allCollections: BwCollection[],
   preImportIds: string[],
-): MergePlan[] {
+): StaleCollection[] {
   const preSet = new Set(preImportIds);
 
-  // Map lowercased name → original collection id
-  const origByName = new Map<string, string>();
+  // Map lowercased name → id of a collection the importer created this run
+  const replacementByName = new Map<string, string>();
   for (const col of allCollections) {
-    if (preSet.has(col.id)) {
-      origByName.set(col.name.toLowerCase(), col.id);
+    if (!preSet.has(col.id)) {
+      replacementByName.set(col.name.toLowerCase(), col.id);
     }
   }
 
-  const plan: MergePlan[] = [];
+  const plan: StaleCollection[] = [];
   for (const col of allCollections) {
-    if (preSet.has(col.id)) continue; // not a new collection
-    const origId = origByName.get(col.name.toLowerCase());
-    if (origId && origId !== col.id) {
-      plan.push({ duplicateId: col.id, originalId: origId, name: col.name });
+    if (!preSet.has(col.id)) continue; // created by this import, keep it
+    const replacementId = replacementByName.get(col.name.toLowerCase());
+    if (replacementId && replacementId !== col.id) {
+      plan.push({ staleId: col.id, replacementId, name: col.name });
     }
   }
   return plan;
 }
 
-export interface DedupeResult {
-  merged: number;
+export interface ReconcileResult {
+  removed: number;
   needsReview: number;
 }
 
-export async function dedupeOrgCollections(opts: {
+/**
+ * Number of items in a collection, or null when that can't be established — a failed
+ * command or unparseable output must not be read as "empty", since the count is what
+ * authorises a delete.
+ */
+async function collectionItemCount(opts: {
+  profileDir: string;
+  sessionKey: string;
+  collectionId: string;
+  log?: LogCallback;
+}): Promise<number | null> {
+  const { profileDir, sessionKey, collectionId, log } = opts;
+  // Full item contents (names, usernames, passwords) — keep stdout out of the job log.
+  const result = await runBw(
+    ['list', 'items', '--collectionid', collectionId, '--session', sessionKey],
+    { profileDir, timeout: 30000, silenceStdout: true },
+    log,
+  );
+  if (result.exitCode !== 0) return null;
+  try {
+    const items = JSON.parse(result.stdout) as unknown[];
+    return Array.isArray(items) ? items.length : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Removes the collections the import superseded, leaving one collection per name.
+ *
+ * The superseded collection is deleted rather than drained into: post-purge it is empty and
+ * the imported one holds every item, so draining would mean moving the whole vault back
+ * across two `bw` invocations per item. The trade-off is that a collection's id changes on
+ * every sync, so group and member access assignments bound to the old id do not survive.
+ */
+export async function reconcileOrgCollections(opts: {
   profileDir: string;
   sessionKey: string;
   orgId: string;
   preImportIds: string[];
   log?: LogCallback;
-}): Promise<DedupeResult> {
-  const { profileDir, sessionKey, orgId, preImportIds, log } = opts;
+  /** Polled between collections so a cancelled job stops at the next one. */
+  shouldAbort?: () => boolean;
+}): Promise<ReconcileResult> {
+  const { profileDir, sessionKey, orgId, preImportIds, log, shouldAbort } = opts;
 
   log?.('app' as never, `[collections] Reconciling org collections for org ${orgId}...`);
   await syncProfile(profileDir, sessionKey, log);
 
-  const rawCols = await listOrgCollections(profileDir, sessionKey, orgId, log);
-  const cols = rawCols as BwCollection[];
+  const cols = (await listOrgCollections(profileDir, sessionKey, orgId, log)) as BwCollection[];
 
-  const plan = planCollectionMerge(cols, preImportIds);
+  const plan = planStaleCollections(cols, preImportIds);
   if (plan.length === 0) {
-    log?.('app' as never, '[collections] ✅ No duplicate collections — importer reused existing ones.');
-    return { merged: 0, needsReview: 0 };
+    log?.('app' as never, '[collections] ✅ No superseded collections — nothing to reconcile.');
+    return { removed: 0, needsReview: 0 };
   }
 
-  let merged = 0;
+  let removed = 0;
   let needsReview = 0;
 
-  for (const { duplicateId, originalId, name } of plan) {
-    log?.('app' as never, `[collections] Merging duplicate '${name}' (${duplicateId}) → (${originalId})`);
+  for (const { staleId, replacementId, name } of plan) {
+    if (shouldAbort?.()) {
+      log?.('app' as never, '[collections] ⏹️ Cancelled — remaining collections left in place');
+      needsReview = plan.length - removed; // everything not already deleted is unresolved
+      break;
+    }
 
-    // Get items in duplicate (full item contents incl. passwords — keep stdout out of the log)
-    const listResult = await runBw(
-      ['list', 'items', '--collectionid', duplicateId, '--session', sessionKey],
-      { profileDir, timeout: 30000, silenceStdout: true },
-      log,
-    );
-    let dupItems: BwItem[] = [];
-    try {
-      dupItems = JSON.parse(listResult.stdout) as BwItem[];
-    } catch { /* empty */ }
-
-    if (dupItems.length === 0) {
-      log?.('app' as never, `[collections] ⚠️ Duplicate '${name}' had no movable items; left in place`);
+    // The purge should have emptied this one. Confirm before deleting: if the purge was
+    // partial, or this is somehow the collection holding the imported items, deleting it
+    // would take real data with it.
+    const remaining = await collectionItemCount({ profileDir, sessionKey, collectionId: staleId, log });
+    if (remaining === null) {
+      log?.('app' as never, `[collections] ⚠️ Could not count items in superseded '${name}' (${staleId}); left in place`);
+      needsReview++;
+      continue;
+    }
+    if (remaining > 0) {
+      log?.('app' as never, `[collections] ⚠️ Superseded '${name}' (${staleId}) still holds ${remaining} item(s); left in place`);
       needsReview++;
       continue;
     }
 
-    let moveFailed = false;
-    let moved = 0;
-
-    for (const item of dupItems) {
-      const getResult = await runBw(['get', 'item', item.id, '--session', sessionKey], { profileDir, timeout: 10000, silenceStdout: true }, log);
-      let fullItem: BwItem;
-      try {
-        fullItem = JSON.parse(getResult.stdout) as BwItem;
-      } catch {
-        log?.('app' as never, `[collections] ⚠️ Failed to get item ${item.id}`);
-        moveFailed = true;
-        continue;
-      }
-
-      // Replace duplicateId with originalId in collectionIds
-      const newCollIds = [...new Set(
-        (fullItem.collectionIds ?? []).map((id) => (id === duplicateId ? originalId : id)),
-      )];
-      const updatedItem = { ...fullItem, collectionIds: newCollIds };
-
-      // Encode and edit
-      const encoded = Buffer.from(JSON.stringify(updatedItem)).toString('base64');
-      const editResult = await runBw(
-        ['edit', 'item', item.id, '--session', sessionKey],
-        { profileDir, stdin: encoded, timeout: 10000, silenceStdout: true },
-        log,
-      );
-      if (editResult.exitCode !== 0) {
-        log?.('app' as never, `[collections] ⚠️ Failed to move item ${item.id}`);
-        moveFailed = true;
-      } else {
-        moved++;
-      }
-    }
-
-    if (moveFailed) {
-      log?.('app' as never, `[collections] ⚠️ Some items could not be moved; keeping duplicate ${duplicateId}`);
-      needsReview++;
-      continue;
-    }
-
-    if (moved === 0) {
-      log?.('app' as never, `[collections] ⚠️ No items moved from ${duplicateId}; left in place`);
-      needsReview++;
-      continue;
-    }
-
-    // Delete duplicate
+    log?.('app' as never, `[collections] Removing superseded '${name}' (${staleId}) — replaced by (${replacementId})`);
     const delResult = await runBw(
-      ['delete', 'org-collection', duplicateId, '--organizationid', orgId, '--session', sessionKey],
+      ['delete', 'org-collection', staleId, '--organizationid', orgId, '--session', sessionKey],
       { profileDir, timeout: 10000 },
       log,
     );
     if (delResult.exitCode !== 0) {
-      log?.('app' as never, `[collections] ⚠️ Items moved but failed to delete duplicate ${duplicateId}`);
+      log?.('app' as never, `[collections] ⚠️ Failed to delete superseded collection ${staleId}`);
       needsReview++;
     } else {
-      merged++;
+      removed++;
     }
   }
 
   if (needsReview > 0) {
-    log?.('app' as never, `[collections] ⚠️ Merged ${merged}, ${needsReview} need manual review`);
+    log?.('app' as never, `[collections] ⚠️ Removed ${removed}, ${needsReview} need manual review`);
   } else {
-    log?.('app' as never, `[collections] ✅ Merged ${merged} duplicate collection(s)`);
+    log?.('app' as never, `[collections] ✅ Removed ${removed} superseded collection(s)`);
   }
 
-  return { merged, needsReview };
+  return { removed, needsReview };
 }

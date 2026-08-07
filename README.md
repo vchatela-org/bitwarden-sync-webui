@@ -279,6 +279,31 @@ mount); later calls are served from the cache. Deleting the cache file is safe �
 The password-protected export (`*_encrypted_pass.json`) is a single opaque blob and yields no counts,
 so a set that has lost its account-key export shows `—`.
 
+Backups written before v1.6.2 carry a stray `.` in their filenames
+(`bitwarden_export_val_20260807_122405._encrypted.json`) and did not parse, so they showed up as
+**unmanaged** and had no readable counts. The server renames them on startup, rewriting the
+`timestamp` and `exportFile` fields inside sidecars to match; a corrected name that is already taken
+is left alone. Once renamed they are ordinary managed sets — which also means retention applies to
+them, so run `/api/backups/retention` with `dryRun` first if you have a long history.
+
+---
+
+## Org collections on import
+
+The import phase purges the destination before importing, and Bitwarden's purge API clears ciphers
+but leaves collections standing. `bw import` never reuses a collection by name, so every collection
+in the export comes back as a second, freshly-created one holding all the items, next to the emptied
+original. The **Reconcile org collections** step deletes those emptied originals, leaving one
+collection per name.
+
+The consequence is that **a collection's id changes on every sync**, so group and member access
+assignments bound to the old id do not survive. Orgs that manage per-collection access through
+groups should re-apply it after a sync, or restrict who the sync destination org is shared with.
+
+A superseded collection is only deleted once it has been confirmed empty. If it still holds items —
+a partial purge, or a count that could not be read — it is left in place and the step reports
+`needs review`.
+
 ---
 
 ## Environment variables
