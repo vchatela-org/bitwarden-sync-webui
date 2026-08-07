@@ -39,7 +39,7 @@ const config = {
   importGuard: { minSourceRatio: 0.5, blockOnEmptySource: true },
   logoutAfterImport: true,
   cliVersion: '2026.7.0',
-  appVersion: '1.7.1',
+  appVersion: '1.7.2',
 };
 
 const ts = (daysAgo: number) => {
