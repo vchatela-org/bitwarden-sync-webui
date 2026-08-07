@@ -4,40 +4,50 @@
   "vaults": [
     { "key": "eu", "name": "Bitwarden EU", "serverUrl": "https://vault.bitwarden.eu" },
     { "key": "com", "name": "Bitwarden US", "serverUrl": "https://vault.bitwarden.com" },
-    { "key": "selfhosted", "name": "Self-hosted", "serverUrl": "https://bitwarden.example.internal" }
+    { "key": "selfhosted", "name": "Self-hosted", "serverUrl": "https://bitwarden.example.internal", "logoutAfterImport": true }
   ],
 
   "backupFolder": "/backups",
   "bitwardenConfigDir": "/data",
 
-  "users": [
-    {
-      "key": "alice",
-      "email": "alice@example.com",
-      "displayName": "Alice",
-      "from": "eu",
-      "to": "com"
-    },
-    {
-      "key": "bob",
-      "email": "bob@example.com",
-      "from": "com",
-      "to": "selfhosted"
-    }
+  "_accounts_comment": [
+    "One Bitwarden identity on ONE vault. The same person on two vaults is two accounts,",
+    "and they do NOT have to share an email or a master password.",
+    "otp: 'required' asks for the two-step code in the same prompt as the password.",
+    "otp: 'unknown' (the default) does not mean the account has no two-step login — only that",
+    "it is not recorded here, so the code is asked for in a second prompt if the CLI wants one.",
+    "otpMethod: 0 = authenticator app, 1 = email, 3 = YubiKey.",
+    "The key becomes a directory name under bitwardenConfigDir, so keep it simple."
+  ],
+  "accounts": [
+    { "key": "alice@eu", "vault": "eu", "email": "alice@example.com", "displayName": "Alice", "otp": "required", "otpMethod": 0 },
+    { "key": "alice@com", "vault": "com", "email": "alice.personal@example.com", "displayName": "Alice" },
+    { "key": "bob@com", "vault": "com", "email": "bob@example.com", "displayName": "Bob" },
+    { "key": "bob@selfhosted", "vault": "selfhosted", "email": "bob@example.internal", "displayName": "Bob" }
   ],
 
+  "_orgs_comment": "An org's id differs per vault. List only the vaults it actually exists on.",
   "orgs": [
     {
       "key": "acme",
       "name": "Acme Corp",
-      "owner": "bob",
-      "from": "com",
-      "to": "selfhosted",
-      "orgIds": {
+      "ids": {
         "com": "00000000-0000-0000-0000-000000000001",
         "selfhosted": "00000000-0000-0000-0000-000000000002"
       }
     }
+  ],
+
+  "_syncs_comment": [
+    "One directed route, and the unit everything is keyed on: the sync key names the job",
+    "target, the backup files and the dashboard row. from/to are ACCOUNT keys, so each side",
+    "brings its own email, password and vault. Omit 'org' for a personal-vault route.",
+    "One source account can feed several routes (fan-out to more than one destination)."
+  ],
+  "syncs": [
+    { "key": "alice", "from": "alice@eu", "to": "alice@com" },
+    { "key": "bob", "from": "bob@com", "to": "bob@selfhosted" },
+    { "key": "acme", "from": "bob@com", "to": "bob@selfhosted", "org": "acme" }
   ],
 
   "retention": {
@@ -50,5 +60,5 @@
     "blockOnEmptySource": true
   },
 
-  "homeLogoutAfterImport": true
+  "logoutAfterImport": true
 }

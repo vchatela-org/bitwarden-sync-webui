@@ -37,11 +37,18 @@ export interface DiffResult {
 export interface CredentialPrompt {
   kind: 'credentials';
   accountKey: string;
+  accountEmail: string;
+  displayName?: string;
+  /** Sync keys this one login covers. */
   targets: string[];
   vaultKey: string;
   vaultName: string;
   needsOtp: boolean;
   otpMethod?: number;
+  /** The code field is showing because the account is configured `otp: "required"`. */
+  otpHinted?: boolean;
+  /** Other endpoint accounts of `targets` — offered as "reuse this password for …". */
+  counterparts: string[];
 }
 
 export interface ConfirmationPrompt {
@@ -71,31 +78,45 @@ export interface VaultConfig {
   key: string;
   name: string;
   serverUrl: string;
+  logoutAfterImport?: boolean;
 }
 
-export interface UserConfig {
+/** One Bitwarden identity on one vault. */
+export interface AccountConfig {
   key: string;
+  vault: string;
   email: string;
   displayName?: string;
-  from: string;
-  to: string;
+  otp: 'unknown' | 'required';
 }
 
 export interface OrgConfig {
   key: string;
   name: string;
-  owner: string;
+  /** Vault keys this org exists on. */
+  vaults: string[];
+}
+
+/** One directed route between two accounts — the unit jobs and backups are keyed on. */
+export interface SyncConfig {
+  key: string;
+  displayName?: string;
+  /** Account key on the source side. */
   from: string;
+  /** Account key on the destination side. */
   to: string;
+  /** Org key, when this route syncs an org rather than a personal vault. */
+  org?: string;
 }
 
 export interface AppConfig {
   vaults: VaultConfig[];
-  users: UserConfig[];
+  accounts: AccountConfig[];
   orgs: OrgConfig[];
+  syncs: SyncConfig[];
   retention: { keepDaily: number; keepMonthly: number };
   importGuard: { minSourceRatio: number; blockOnEmptySource: boolean };
-  homeLogoutAfterImport: boolean;
+  logoutAfterImport: boolean;
   cliVersion: string;
   appVersion: string;
 }

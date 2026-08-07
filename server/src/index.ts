@@ -14,7 +14,11 @@ async function main(): Promise<void> {
     console.error(`[startup] Config error: ${configResult.error}`);
     // Continue serving — show config error page rather than CrashLoopBackOff
   } else {
-    console.log(`[startup] Config loaded: ${configResult.config.users.length} users, ${configResult.config.orgs.length} orgs`);
+    const { vaults, accounts, syncs, orgs } = configResult.config;
+    console.log(
+      `[startup] Config loaded: ${vaults.length} vaults, ${accounts.length} accounts, ` +
+      `${syncs.length} syncs, ${orgs.length} orgs`,
+    );
   }
 
   // Boot-time CLI version assertion (non-fatal)

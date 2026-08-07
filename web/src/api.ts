@@ -87,10 +87,10 @@ export async function deleteJobs(ids: string[]): Promise<DeleteJobsResult> {
   });
 }
 
-export async function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number, sharedAcrossVaults?: boolean): Promise<void> {
+export async function submitCredentials(jobId: string, accountKey: string, password: string, otp?: string, otpMethod?: number, reuseForCounterparts?: boolean): Promise<void> {
   await fetchJson(`/api/jobs/${jobId}/credentials`, {
     method: 'POST',
-    body: JSON.stringify({ accountKey, password, otp, otpMethod, sharedAcrossVaults }),
+    body: JSON.stringify({ accountKey, password, otp, otpMethod, reuseForCounterparts }),
   });
 }
 

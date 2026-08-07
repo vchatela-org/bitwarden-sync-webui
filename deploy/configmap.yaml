@@ -1,6 +1,9 @@
 ---
 # ConfigMap — mount as /config/targets.json inside the pod.
 # Edit the values below; the structure is validated by the server at startup.
+#
+# Model: vaults (Bitwarden instances) → accounts (one identity on one vault) →
+# syncs (a directed from-account → to-account route, and the unit jobs/backups are keyed on).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -15,24 +18,28 @@ data:
       ],
       "backupFolder": "/backups",
       "bitwardenConfigDir": "/data/bitwarden",
-      "users": [
-        { "key": "val",    "email": "val@example.com",    "displayName": "Val", "from": "cloud", "to": "home" },
-        { "key": "mathou", "email": "mathou@example.com", "displayName": "Mathou", "from": "cloud", "to": "home" }
+      "accounts": [
+        { "key": "val@cloud",    "vault": "cloud", "email": "val@example.com",    "displayName": "Val", "otp": "required", "otpMethod": 0 },
+        { "key": "val@home",     "vault": "home",  "email": "val@example.com",    "displayName": "Val" },
+        { "key": "mathou@cloud", "vault": "cloud", "email": "mathou@example.com", "displayName": "Mathou" },
+        { "key": "mathou@home",  "vault": "home",  "email": "mathou@example.com", "displayName": "Mathou" }
       ],
       "orgs": [
         {
           "key": "org",
           "name": "My Organisation",
-          "owner": "val",
-          "from": "cloud",
-          "to": "home",
-          "orgIds": {
+          "ids": {
             "cloud": "00000000-0000-0000-0000-000000000001",
             "home": "00000000-0000-0000-0000-000000000002"
           }
         }
       ],
+      "syncs": [
+        { "key": "val",    "from": "val@cloud",    "to": "val@home" },
+        { "key": "mathou", "from": "mathou@cloud", "to": "mathou@home" },
+        { "key": "org",    "from": "val@cloud",    "to": "val@home", "org": "org" }
+      ],
       "retention": { "keepDaily": 7, "keepMonthly": 12 },
       "importGuard": { "minSourceRatio": 0.5, "blockOnEmptySource": true },
-      "homeLogoutAfterImport": true
+      "logoutAfterImport": true
     }

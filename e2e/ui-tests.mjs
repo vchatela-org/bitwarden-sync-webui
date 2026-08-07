@@ -132,14 +132,15 @@ async function main() {
       await masterPwInput.fill(DEMO_MASTER_PW);
       ok('Filled master password');
 
-      // Wait for OTP detection (account has 2FA)
+      // The code field shows immediately when the account is configured `otp: "required"`,
+      // otherwise only after the CLI's first login attempt asks for one.
       await page.waitForTimeout(3000);
       const otpInput = modal.locator('#otp-code');
       const otpVisible = await otpInput.isVisible().catch(() => false);
       if (otpVisible) {
-        ok('OTP field appeared (2FA detected by bw CLI)');
+        ok('OTP field appeared (from account config or bw CLI)');
       } else {
-        console.log('  ⚠️  OTP not detected yet — may need more time');
+        console.log('  ⚠️  OTP not shown — expected unless the account has two-step login');
       }
 
       // Cancel the job (we can't complete without a fresh TOTP)

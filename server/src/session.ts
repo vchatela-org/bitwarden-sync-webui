@@ -20,7 +20,19 @@ export interface SessionState {
 
 export type InitResult =
   | { ok: true; sessionKey: string }
-  | { ok: false; reason: 'needs-password' | 'needs-otp' | 'failed' | 'max-attempts'; message: string };
+  | {
+      ok: false;
+      reason: 'needs-password' | 'needs-otp' | 'failed' | 'max-attempts';
+      message: string;
+      /**
+       * Set on 'needs-password' when this profile is heading for a full `bw login` (not an
+       * `unlock`) and the account is configured with `otp: "required"` — i.e. the credential
+       * prompt can ask for the two-step code up front instead of failing and re-prompting.
+       * Never set for an `unlock`, which takes no code: asking there would burn a TOTP code
+       * the CLI is going to ignore.
+       */
+      otpExpected?: boolean;
+    };
 
 export async function getBwStatus(profileDir: string, log?: LogCallback): Promise<BwStatus> {
   const result = await runBw(['status', '--response'], { profileDir, timeout: 10000 }, log);
@@ -55,10 +67,12 @@ export async function getBwStatus(profileDir: string, log?: LogCallback): Promis
  */
 export async function bwInit(opts: {
   accountKey: string; // password-cache key — opaque, never string-surgered
-  profileLabel: string; // e.g. 'alice:eu' — bw CLI profile-dir naming / log messages only
+  profileLabel: string; // e.g. 'alice@eu' — log messages only
   email: string;
   wantServer: string;
   profileDir: string;
+  /** From the account's `otp: "required"` flag — only a hint for the prompt, never a gate. */
+  otpRequired?: boolean;
   otp?: string;
   otpMethod?: number;
   log?: LogCallback;
@@ -67,23 +81,35 @@ export async function bwInit(opts: {
   const MAX_ATTEMPTS = 3;
 
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
-    const pw = getPassword(accountKey);
-    if (!pw) {
-      return { ok: false, reason: 'needs-password', message: `Password required for ${accountKey}` };
-    }
-
     // 1. Read status + server.
     // A profile that has never had `bw config server` run against it reports
     // serverUrl: null and silently uses the CLI's built-in default, so treat an
     // empty serverUrl as that default rather than as "matches whatever we want".
+    // This runs before the cached-password check (and mutates nothing) so a
+    // 'needs-password' result can tell the caller whether a two-step code will be
+    // wanted too — that is what lets the UI ask for both in one prompt.
     const statusResult = await getBwStatus(profileDir, log);
     let currentStatus = statusResult.status;
     const configuredServer = statusResult.serverUrl?.replace(/\/$/, '') ?? '';
     const currentServer = configuredServer || DEFAULT_BW_SERVER;
     const wantServerNorm = wantServer.replace(/\/$/, '');
+    const serverMismatch = currentServer !== wantServerNorm;
+
+    const pw = getPassword(accountKey);
+    if (!pw) {
+      // A mismatched server forces a logout below, so this profile is headed for a
+      // full login either way.
+      const willLogin = serverMismatch || currentStatus === 'unauthenticated';
+      return {
+        ok: false,
+        reason: 'needs-password',
+        message: `Password required for ${accountKey}`,
+        otpExpected: opts.otpRequired === true && willLogin,
+      };
+    }
 
     // 2. Server mismatch → logout first, then reconfigure
-    if (currentServer !== wantServerNorm) {
+    if (serverMismatch) {
       log?.('app' as never, `[${profileLabel}] Server is '${configuredServer || `unset (default ${DEFAULT_BW_SERVER})`}' → switching to '${wantServerNorm}'`);
       if (currentStatus !== 'unauthenticated') {
         await runBw(['logout'], { profileDir, timeout: 10000 }, log);
@@ -143,7 +169,13 @@ export async function bwInit(opts: {
       if (attempt >= MAX_ATTEMPTS) {
         return { ok: false, reason: 'max-attempts', message: `Failed after ${MAX_ATTEMPTS} attempts` };
       }
-      return { ok: false, reason: 'needs-password', message: `Wrong password or OTP for ${accountKey} (attempt ${attempt})` };
+      return {
+        ok: false,
+        reason: 'needs-password',
+        message: `Wrong password or OTP for ${accountKey} (attempt ${attempt})`,
+        // Still on the login path, so the retry prompt should keep offering the code field.
+        otpExpected: opts.otpRequired === true && currentStatus === 'unauthenticated',
+      };
     }
 
     // Register the session key for exact-match redaction (belt-and-suspenders alongside

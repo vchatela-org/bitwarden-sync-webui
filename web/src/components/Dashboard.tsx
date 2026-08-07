@@ -14,7 +14,7 @@ import {
   ArrowDown,
   Check,
 } from 'lucide-react';
-import { AppConfig, BackupSet, VaultStatus } from '../types.js';
+import { AppConfig, BackupSet, SyncConfig, VaultStatus } from '../types.js';
 import { createJob } from '../api.js';
 import { useDashboardData } from '../state/DashboardData.js';
 import { Button } from './ui/Button.js';
@@ -31,13 +31,12 @@ interface Props {
   onJobCreated: (jobId: string) => void;
 }
 
+/** A sync route, flattened for the table. */
 interface Target {
   key: string;
   kind: 'user' | 'org';
   displayName: string;
-  /** Org owner key — used to nest orgs beneath the user that owns them. */
-  owner: string | null;
-  /** Source/destination vault keys this target syncs between. */
+  /** Source/destination account keys. */
   from: string;
   to: string;
 }
@@ -59,37 +58,48 @@ export function Dashboard({ config, onJobCreated }: Props) {
     setError,
   } = useDashboardData();
 
-  /** Users first, each immediately followed by the orgs it owns. */
+  const accountByKey = useMemo(
+    () => new Map(config.accounts.map((a) => [a.key, a])),
+    [config.accounts],
+  );
+
+  /**
+   * Syncs grouped by their source account — one group is everything a single source-side
+   * login covers — with personal routes listed before the org routes nested under them.
+   */
   const allTargets = useMemo<Target[]>(() => {
-    const users: Target[] = config.users.map((u) => ({
-      key: u.key,
-      kind: 'user',
-      displayName: u.displayName ?? u.key,
-      owner: null,
-      from: u.from,
-      to: u.to,
-    }));
-    const orgs: Target[] = config.orgs.map((o) => ({
-      key: o.key,
-      kind: 'org',
-      displayName: o.name,
-      owner: o.owner,
-      from: o.from,
-      to: o.to,
-    }));
+    const orgName = new Map(config.orgs.map((o) => [o.key, o.name]));
+    const toTarget = (s: SyncConfig): Target => ({
+      key: s.key,
+      kind: s.org ? 'org' : 'user',
+      displayName:
+        s.displayName ??
+        (s.org ? orgName.get(s.org) ?? s.org : accountByKey.get(s.from)?.displayName ?? s.key),
+      from: s.from,
+      to: s.to,
+    });
+
+    const groups = new Map<string, SyncConfig[]>();
+    for (const s of config.syncs) {
+      const existing = groups.get(s.from);
+      if (existing) existing.push(s);
+      else groups.set(s.from, [s]);
+    }
 
     const ordered: Target[] = [];
-    for (const user of users) {
-      ordered.push(user);
-      ordered.push(...orgs.filter((o) => o.owner === user.key));
+    for (const [, syncs] of groups) {
+      ordered.push(...syncs.filter((s) => !s.org).map(toTarget));
+      ordered.push(...syncs.filter((s) => s.org).map(toTarget));
     }
-    // Orgs whose owner is not a configured user still need to be listed.
-    ordered.push(...orgs.filter((o) => !users.some((u) => u.key === o.owner)));
     return ordered;
-  }, [config]);
+  }, [config.syncs, config.orgs, accountByKey]);
 
-  const vaultName = (key: string): string | undefined =>
-    config.vaults.find((v) => v.key === key)?.name;
+  /** Vault name for an account key — each account lives on exactly one vault. */
+  const vaultOf = (accountKey: string): string | undefined => {
+    const vaultKey = accountByKey.get(accountKey)?.vault;
+    return config.vaults.find((v) => v.key === vaultKey)?.name;
+  };
+  const emailOf = (accountKey: string): string | undefined => accountByKey.get(accountKey)?.email;
 
   // Re-read the inventory each time the dashboard is shown; the cached sets stay
   // on screen meanwhile, so a job run elsewhere is picked up without a blank flash.
@@ -160,9 +170,9 @@ export function Dashboard({ config, onJobCreated }: Props) {
       {/* ── Summary ─────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <StatCard
-          label="Targets"
+          label="Syncs"
           value={allTargets.length}
-          hint={`${config.users.length} user${config.users.length === 1 ? '' : 's'} · ${config.orgs.length} org${config.orgs.length === 1 ? '' : 's'}`}
+          hint={`${config.accounts.length} account${config.accounts.length === 1 ? '' : 's'} across ${config.vaults.length} vaults`}
           icon={<Users />}
           tone="accent"
         />
@@ -200,7 +210,7 @@ export function Dashboard({ config, onJobCreated }: Props) {
       {/* ── Targets ─────────────────────────────────────────────────────── */}
       <Card>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-line bg-surface-2/60 px-4 py-3">
-          <h2 className="text-[13px] font-semibold text-fg">Targets</h2>
+          <h2 className="text-[13px] font-semibold text-fg">Syncs</h2>
           <span
             className={cn(
               'text-xs transition-colors',
@@ -241,8 +251,8 @@ export function Dashboard({ config, onJobCreated }: Props) {
         {allTargets.length === 0 ? (
           <EmptyState
             icon={<Users />}
-            title="No targets configured"
-            description="Add users and organisations to targets.json, then restart the container."
+            title="No syncs configured"
+            description="Add accounts and syncs to targets.json, then restart the container."
           />
         ) : (
           <div className="scrollbar-thin overflow-x-auto">
@@ -307,7 +317,8 @@ export function Dashboard({ config, onJobCreated }: Props) {
                           status={st?.source}
                           liveItems={liveCounts[target.key]?.source}
                           liveAt={liveCounts[target.key]?.sourceAt}
-                          vaultName={vaultName(target.from)}
+                          vaultName={vaultOf(target.from)}
+                          accountEmail={emailOf(target.from)}
                         />
                       </td>
                       <td className="py-2.5 pr-3">
@@ -315,7 +326,8 @@ export function Dashboard({ config, onJobCreated }: Props) {
                           status={st?.dest}
                           liveItems={liveCounts[target.key]?.dest}
                           liveAt={liveCounts[target.key]?.destAt}
-                          vaultName={vaultName(target.to)}
+                          vaultName={vaultOf(target.to)}
+                          accountEmail={emailOf(target.to)}
                         />
                       </td>
                       <td className="py-2.5 pr-3">
@@ -436,7 +448,7 @@ function ItemsCell({ lastKnown, live, liveAt }: { lastKnown?: number; live?: num
   );
 }
 
-function VaultCell({ status, liveItems, liveAt, vaultName }: { status?: VaultStatus; liveItems?: number; liveAt?: string; vaultName?: string }) {
+function VaultCell({ status, liveItems, liveAt, vaultName, accountEmail }: { status?: VaultStatus; liveItems?: number; liveAt?: string; vaultName?: string; accountEmail?: string }) {
   const liveLabel = liveItems !== undefined && (
     <span className="inline-flex items-baseline gap-1 pl-3 text-[11px] font-medium tabular-nums text-info">
       {liveItems.toLocaleString()} items
@@ -448,8 +460,17 @@ function VaultCell({ status, liveItems, liveAt, vaultName }: { status?: VaultSta
     </span>
   );
 
+  // The account is named here rather than only in the status tooltip: with per-vault accounts
+  // the two sides can be different identities, and a profile that has never been logged into
+  // has no status to hover over at all.
   const nameLabel = vaultName && (
-    <span className="truncate text-[11px] text-fg-faint">{vaultName}</span>
+    accountEmail ? (
+      <Tooltip content={<span className="font-mono">{accountEmail}</span>}>
+        <span className="truncate text-[11px] text-fg-faint">{vaultName}</span>
+      </Tooltip>
+    ) : (
+      <span className="truncate text-[11px] text-fg-faint">{vaultName}</span>
+    )
   );
 
   if (!status) {

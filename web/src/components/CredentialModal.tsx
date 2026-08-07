@@ -26,7 +26,7 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
   const [password, setPassword] = useState('');
   const [otp, setOtp] = useState('');
   const [otpMethod, setOtpMethod] = useState(prompt.otpMethod ?? 0);
-  const [shared, setShared] = useState(false);
+  const [reuse, setReuse] = useState(false);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [cancelling, setCancelling] = useState(false);
@@ -54,7 +54,7 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
         password,
         prompt.needsOtp ? otp : undefined,
         prompt.needsOtp ? otpMethod : undefined,
-        shared,
+        reuse,
       );
       onSubmitted();
     } catch (err: unknown) {
@@ -88,6 +88,11 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
             <Server className="size-3 text-fg-muted" />
             {prompt.vaultName}
           </span>
+          {prompt.accountEmail && (
+            <span className="w-full font-mono text-[11px] text-fg-subtle">
+              {masked ? maskValue(prompt.accountEmail) : prompt.accountEmail}
+            </span>
+          )}
           {prompt.targets && prompt.targets.length > 0 && (
             <span className="w-full text-[11px] text-fg-faint">
               Covers: {masked ? prompt.targets.map(maskValue).join(', ') : prompt.targets.join(', ')}
@@ -130,11 +135,19 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
           />
         </Field>
 
-        <CheckboxField
-          checked={shared}
-          onCheckedChange={setShared}
-          label={`Use this password for ${masked ? maskValue(prompt.accountKey) : prompt.accountKey}'s other vaults too`}
-        />
+        {/* Accounts are per vault, so the other side of a sync is a separate identity with its
+            own cached password — offer to reuse this one rather than asking twice. */}
+        {prompt.counterparts && prompt.counterparts.length > 0 && (
+          <CheckboxField
+            checked={reuse}
+            onCheckedChange={setReuse}
+            label={`Use this password for ${
+              masked
+                ? prompt.counterparts.map(maskValue).join(', ')
+                : prompt.counterparts.join(', ')
+            } too`}
+          />
+        )}
 
         {prompt.needsOtp && (
           <>
@@ -164,6 +177,13 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
                 className="font-mono tracking-[0.3em]"
               />
             </Field>
+
+            {prompt.otpHinted && (
+              <p className="-mt-1 text-[11px] leading-relaxed text-fg-faint">
+                This account is configured as requiring two-step login, so the code is asked for
+                up front. Enter it last — codes expire quickly.
+              </p>
+            )}
           </>
         )}
 

@@ -40,7 +40,7 @@ import {
 } from './backups.js';
 import { getBwStatus } from './session.js';
 import { getLiveCounts } from './liveCounts.js';
-import { profileDir, allTargetKeys, Config, ConfigLoadResult } from './config.js';
+import { profileDir, allTargetKeys, syncByKey, ConfigLoadResult } from './config.js';
 import { getCliVersion } from './bwCli.js';
 import { getAppVersion } from './version.js';
 
@@ -117,11 +117,18 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
     const cliVersion = await getCliVersion().catch(() => 'unknown');
     res.json({
       vaults: config.vaults,
-      users: config.users.map((u) => ({ key: u.key, email: u.email, displayName: u.displayName, from: u.from, to: u.to })),
-      orgs: config.orgs.map((o) => ({ key: o.key, name: o.name, owner: o.owner, from: o.from, to: o.to })),
+      accounts: config.accounts.map((a) => ({
+        key: a.key, vault: a.vault, email: a.email, displayName: a.displayName, otp: a.otp,
+      })),
+      // Org ids are deployment identifiers the UI has no use for — send the vault keys the
+      // org exists on instead, which is all the dashboard needs to describe coverage.
+      orgs: config.orgs.map((o) => ({ key: o.key, name: o.name, vaults: Object.keys(o.ids) })),
+      syncs: config.syncs.map((s) => ({
+        key: s.key, displayName: s.displayName, from: s.from, to: s.to, org: s.org,
+      })),
       retention: config.retention,
       importGuard: config.importGuard,
-      homeLogoutAfterImport: config.homeLogoutAfterImport,
+      logoutAfterImport: config.logoutAfterImport,
       cliVersion,
       appVersion: getAppVersion(),
     });
@@ -144,20 +151,24 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
     }
     const { config } = configResult;
     const results: Record<string, unknown> = {};
-    const targets = allTargetKeys(config);
-    for (const key of targets) {
-      const userCfg = config.users.find((u) => u.key === key);
-      const orgCfg = config.orgs.find((o) => o.key === key);
-      const targetCfg = orgCfg ?? userCfg!;
-      const ownerKey = orgCfg ? orgCfg.owner : key;
 
+    // Several syncs commonly share an endpoint account (a personal sync and the org syncs
+    // exported through the same login), and each `bw status` is a child process — so read
+    // each account's profile at most once per request.
+    const statusByAccount = new Map<string, Promise<unknown>>();
+    const statusOf = (accountKey: string): Promise<unknown> => {
+      let pending = statusByAccount.get(accountKey);
+      if (!pending) {
+        pending = getBwStatus(profileDir(config.bitwardenConfigDir, accountKey)).catch(() => null);
+        statusByAccount.set(accountKey, pending);
+      }
+      return pending;
+    };
+
+    for (const key of allTargetKeys(config)) {
+      const sync = syncByKey(config, key);
       try {
-        const sourceDir = profileDir(config.bitwardenConfigDir, ownerKey, targetCfg.from);
-        const destDir = profileDir(config.bitwardenConfigDir, ownerKey, targetCfg.to);
-        const [sourceStatus, destStatus] = await Promise.all([
-          getBwStatus(sourceDir).catch(() => null),
-          getBwStatus(destDir).catch(() => null),
-        ]);
+        const [sourceStatus, destStatus] = await Promise.all([statusOf(sync.from), statusOf(sync.to)]);
         results[key] = { source: sourceStatus, dest: destStatus };
       } catch {
         results[key] = { source: null, dest: null };
@@ -230,18 +241,18 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
       res.status(409).json({ error: 'Job not awaiting credentials' });
       return;
     }
-    const { accountKey, password, otp, otpMethod, sharedAcrossVaults } = req.body as {
+    const { accountKey, password, otp, otpMethod, reuseForCounterparts } = req.body as {
       accountKey?: string;
       password?: string;
       otp?: string;
       otpMethod?: number;
-      sharedAcrossVaults?: boolean;
+      reuseForCounterparts?: boolean;
     };
     if (!accountKey || !password) {
       res.status(400).json({ error: 'accountKey and password required' });
       return;
     }
-    const ok = submitCredentials(job.id, accountKey, password, otp, otpMethod, sharedAcrossVaults === true);
+    const ok = submitCredentials(job.id, accountKey, password, otp, otpMethod, reuseForCounterparts === true);
     if (!ok) { res.status(409).json({ error: 'No pending credential prompt for that account' }); return; }
     res.json({ ok: true });
   });

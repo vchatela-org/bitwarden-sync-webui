@@ -9,35 +9,35 @@ interface PasswordEntry {
 
 const passwords = new Map<string, PasswordEntry>();
 
-/** Store a password in RAM for a given user key */
-export function cachePassword(userKey: string, password: string): void {
+/** Store a password in RAM for a given account key */
+export function cachePassword(accountKey: string, password: string): void {
   // Unregister old if present
-  const old = passwords.get(userKey);
+  const old = passwords.get(accountKey);
   if (old) {
     unregisterSecret(old.password);
   }
-  passwords.set(userKey, { password, expiresAt: Date.now() + IDLE_TTL_MS });
+  passwords.set(accountKey, { password, expiresAt: Date.now() + IDLE_TTL_MS });
   registerSecret(password);
 }
 
 /** Retrieve a cached password, or undefined if not present/expired */
-export function getPassword(userKey: string): string | undefined {
-  const entry = passwords.get(userKey);
+export function getPassword(accountKey: string): string | undefined {
+  const entry = passwords.get(accountKey);
   if (!entry) return undefined;
   if (Date.now() > entry.expiresAt) {
-    forgetPassword(userKey);
+    forgetPassword(accountKey);
     return undefined;
   }
   return entry.password;
 }
 
 /** Remove a cached password (e.g. after failed login) */
-export function forgetPassword(userKey: string): void {
-  const entry = passwords.get(userKey);
+export function forgetPassword(accountKey: string): void {
+  const entry = passwords.get(accountKey);
   if (entry) {
     unregisterSecret(entry.password);
     // Zero out the password string (best-effort in JS — V8 may have already copied it)
-    passwords.delete(userKey);
+    passwords.delete(accountKey);
   }
 }
 
@@ -49,13 +49,13 @@ export function clearAllPasswords(): void {
 }
 
 /** Check if a password is cached */
-export function hasPassword(userKey: string): boolean {
-  return getPassword(userKey) !== undefined;
+export function hasPassword(accountKey: string): boolean {
+  return getPassword(accountKey) !== undefined;
 }
 
 /** Refresh the TTL for an existing password */
-export function refreshPassword(userKey: string): void {
-  const entry = passwords.get(userKey);
+export function refreshPassword(accountKey: string): void {
+  const entry = passwords.get(accountKey);
   if (entry) {
     entry.expiresAt = Date.now() + IDLE_TTL_MS;
   }

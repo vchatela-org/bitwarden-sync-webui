@@ -10,8 +10,9 @@ A self-hosted **web UI for syncing Bitwarden vaults between any number of Bitwar
 (cloud regions, self-hosted servers, or a mix), implemented as a TypeScript/Node.js backend +
 React SPA, deployed as a Docker image into a k3s cluster.
 
-Each user or org target declares its own source (`from`) and destination (`to`) vault, so a single
-deployment can sync different targets between different instance pairs at once (e.g. one target
+Identities are declared **per vault**, so the two sides of a sync need not share an email or a
+master password, and each sync declares its own source and destination account. A single
+deployment can therefore run different routes between different instance pairs at once (e.g. one
 `eu → com`, another `com → selfhosted`) — see [Configuration](#configuration-targetsjson).
 
 ---
@@ -131,40 +132,94 @@ kubectl -n bitwarden rollout status deployment/bitwarden-webui
 ## Configuration (`targets.json`)
 
 The config file is mounted from a ConfigMap at `CONFIG_PATH` (default `/config/targets.json`).
+It has four building blocks:
+
+| Block | What it is |
+|---|---|
+| `vaults` | A named Bitwarden instance (cloud region or self-hosted). |
+| `accounts` | **One identity on one vault** — its own email, master password, two-step setting and CLI profile directory. The same person on two vaults is two accounts. |
+| `orgs` | An organisation and its id **on each vault** it exists on. No owner: whichever account is on a route's side is the one that logs in there. |
+| `syncs` | A directed `from-account → to-account` route. This is the unit everything is keyed on — the job target, the backup filename and the dashboard row. |
 
 ```jsonc
 {
   "vaults": [
-    // Any number of named Bitwarden instances — each target below picks its own pair.
+    // Any number of named Bitwarden instances — each account below picks one.
     { "key": "cloud", "name": "Cloud", "serverUrl": "https://vault.bitwarden.eu" },  // EU region — do NOT use bitwarden.com
-    { "key": "home",  "name": "Home",  "serverUrl": "https://bitwarden.example.internal" }
+    { "key": "home",  "name": "Home",  "serverUrl": "https://bitwarden.example.internal",
+      "logoutAfterImport": true }                  // optional per-vault override of the global flag
   ],
   "backupFolder":   "/backups",
   "bitwardenConfigDir": "/data/bitwarden",
-  "users": [
-    { "key": "val",    "email": "val@example.com",    "displayName": "Val", "from": "cloud", "to": "home" },
-    { "key": "mathou", "email": "mathou@example.com", "from": "cloud", "to": "home" }
+  "accounts": [
+    // The key becomes a directory name under bitwardenConfigDir, so keep it simple.
+    { "key": "val@cloud", "vault": "cloud", "email": "val@example.com", "displayName": "Val",
+      "otp": "required", "otpMethod": 0 },         // 0 = authenticator, 1 = email, 3 = YubiKey
+    { "key": "val@home",  "vault": "home",  "email": "val.self@example.internal", "displayName": "Val" },
+    { "key": "mathou@cloud", "vault": "cloud", "email": "mathou@example.com" },
+    { "key": "mathou@home",  "vault": "home",  "email": "mathou@example.com" }
   ],
   "orgs": [
     {
       "key": "org",
       "name": "My Organisation",
-      "owner": "val",                                // must be a key in users[]
-      "from": "cloud",
-      "to": "home",
-      "orgIds": {
-        "cloud": "00000000-0000-0000-0000-000000000000",   // org ID on the cloud vault
-        "home":  "00000000-0000-0000-0000-000000000000"    // org ID on the home vault
+      "ids": {                                     // list only the vaults it actually exists on
+        "cloud": "00000000-0000-0000-0000-000000000001",
+        "home":  "00000000-0000-0000-0000-000000000002"
       }
     }
   ],
+  "syncs": [
+    { "key": "val",    "from": "val@cloud",    "to": "val@home" },
+    { "key": "mathou", "from": "mathou@cloud", "to": "mathou@home" },
+    { "key": "org",    "from": "val@cloud",    "to": "val@home", "org": "org" }
+  ],
   "retention":  { "keepDaily": 7, "keepMonthly": 12 },
   "importGuard": { "minSourceRatio": 0.5, "blockOnEmptySource": true },
-  "homeLogoutAfterImport": true
+  "logoutAfterImport": true
 }
 ```
 
-Add more entries to `vaults` and point targets' `from`/`to` at them to support more instance pairs.
+### More than two vaults
+
+A sync always has exactly two endpoints, so extra vaults never make the model wider — they just
+add accounts and routes. One source account can feed several destinations: give each route its own
+sync key (`val-home`, `val-offsite`) and each gets its own backups, dashboard row and history.
+
+### Two-step login (`otp`)
+
+`"otp": "required"` on an account makes the credential prompt ask for the master password **and**
+the verification code in one go, instead of failing the login and prompting a second time.
+
+Leaving it out (`"unknown"`, the default) does **not** assert that the account has no two-step
+login — only that it is not recorded here, so the code is discovered the slow way and asked for in
+a second prompt. The code field is never shown when the profile merely needs unlocking, since
+`bw unlock` takes no code and asking would burn a single-use code for nothing.
+
+### Reusing one password across accounts
+
+Because accounts are separate identities, each has its own cached password. When a prompt covers
+syncs whose other endpoint is a different account, it offers a *"use this password for … too"*
+checkbox — so one person with the same master password on both sides still types it once. Nothing
+about shared secrets is written into the config.
+
+### Migrating a pre-1.6 `targets.json`
+
+1.6 replaced `users[]` (one email per person, `from`/`to` vault keys) and org `owner`/`orgIds` with
+`accounts[] + syncs[]`. The server detects the old shape and refuses to start with a pointer here
+rather than a wall of schema errors. To convert:
+
+1. For every `users[]` entry, create **two accounts** — one per vault it referenced — and give each
+   its real email on that vault.
+2. Turn each user into a sync with the same `key`, pointing `from`/`to` at those two accounts.
+3. Move each org's `orgIds` to `ids`, drop its `owner`/`from`/`to`, and add a sync (again keeping the
+   org's old key) whose endpoints are the accounts that own it on each side.
+4. Rename `homeLogoutAfterImport` to `logoutAfterImport`.
+
+**Keep the sync keys identical to the old user/org keys** — backup filenames are built from them,
+so existing backups in `backupFolder` keep resolving and no files need renaming. Profile
+directories are keyed by account instead of `<user>__<vault>`, so each account logs in once more
+after the upgrade; master passwords were never on disk, so nothing is lost.
 
 ### Migrating from `.bitwarden-env`
 
@@ -172,6 +227,9 @@ Add more entries to `vaults` and point targets' `from`/`to` at them to support m
 bash scripts/env-to-json.sh /path/to/.bitwarden-env > /tmp/targets.json
 # Review /tmp/targets.json, then add it to a ConfigMap
 ```
+
+The script emits two accounts per user (same email on both vaults) and one sync per user/org, all
+routed `cloud → home` — split the emails or repoint the routes afterwards.
 
 ---
 

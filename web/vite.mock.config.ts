@@ -13,21 +13,33 @@ const config = {
   vaults: [
     { key: 'cloud', name: 'Cloud', serverUrl: 'https://vault.bitwarden.eu' },
     { key: 'home', name: 'Home', serverUrl: 'https://vault.home.lan' },
+    { key: 'offsite', name: 'Offsite', serverUrl: 'https://vault.offsite.example' },
   ],
-  users: [
-    { key: 'alice', email: 'alice@example.com', displayName: 'Alice Martin', from: 'cloud', to: 'home' },
-    { key: 'bob', email: 'bob@example.com', from: 'cloud', to: 'home' },
+  accounts: [
+    { key: 'alice@cloud', vault: 'cloud', email: 'alice@example.com', displayName: 'Alice Martin', otp: 'required' },
+    { key: 'alice@home', vault: 'home', email: 'alice@home.lan', displayName: 'Alice Martin', otp: 'unknown' },
+    { key: 'alice@offsite', vault: 'offsite', email: 'alice@example.com', displayName: 'Alice Martin', otp: 'unknown' },
+    { key: 'bob@cloud', vault: 'cloud', email: 'bob@example.com', displayName: 'Bob Nguyen', otp: 'unknown' },
+    { key: 'bob@home', vault: 'home', email: 'bob.nguyen@home.lan', displayName: 'Bob Nguyen', otp: 'unknown' },
   ],
   orgs: [
-    { key: 'acme-org', name: 'Acme Corporation', owner: 'alice', from: 'cloud', to: 'home' },
-    { key: 'side-project', name: 'Side Project', owner: 'alice', from: 'cloud', to: 'home' },
-    { key: 'bob-org', name: 'Bob Holdings', owner: 'bob', from: 'cloud', to: 'home' },
+    { key: 'acme', name: 'Acme Corporation', vaults: ['cloud', 'home'] },
+    { key: 'side', name: 'Side Project', vaults: ['cloud', 'home'] },
+    { key: 'holdings', name: 'Bob Holdings', vaults: ['cloud', 'home'] },
+  ],
+  syncs: [
+    { key: 'alice', from: 'alice@cloud', to: 'alice@home' },
+    { key: 'alice-offsite', from: 'alice@cloud', to: 'alice@offsite' },
+    { key: 'acme-org', from: 'alice@cloud', to: 'alice@home', org: 'acme' },
+    { key: 'side-project', from: 'alice@cloud', to: 'alice@home', org: 'side' },
+    { key: 'bob', from: 'bob@cloud', to: 'bob@home' },
+    { key: 'bob-org', from: 'bob@cloud', to: 'bob@home', org: 'holdings' },
   ],
   retention: { keepDaily: 7, keepMonthly: 6 },
   importGuard: { minSourceRatio: 0.5, blockOnEmptySource: true },
-  homeLogoutAfterImport: true,
+  logoutAfterImport: true,
   cliVersion: '2026.7.0',
-  appVersion: '1.5.3',
+  appVersion: '1.6.0',
 };
 
 const ts = (daysAgo: number) => {
@@ -57,6 +69,7 @@ const backups = {
     set('alice', 'user', 0.2, 412, 884_000),
     set('alice', 'user', 1.2, 410, 880_100),
     set('alice', 'user', 3.2, 402, 871_400),
+    set('alice-offsite', 'user', 1.1, 412, 884_000),
     set('acme-org', 'org', 0.3, 871, 1_942_000),
     set('acme-org', 'org', 4.3, 864, 1_930_500),
     set('side-project', 'org', 9.5, 63, 121_000),
@@ -65,12 +78,26 @@ const backups = {
   unmanaged: ['/backups/legacy-dump-2024.json', '/backups/manual_export.json'],
 };
 
+// Steps are grouped by source account, and labelled per account (logins) or per sync (work),
+// mirroring server/src/runner.ts buildSteps().
+const STEP_LABELS = [
+  '[alice@cloud] Cloud login',
+  '[alice@cloud] Cloud sync',
+  '[alice] Export encrypted',
+  '[alice] Export password-protected',
+  '[alice] Write sidecar metadata',
+  '[alice@home] Home login',
+  '[alice] Pre-import diff',
+  '[alice] Purge destination vault',
+  '[alice] Import',
+];
+
 const steps = (n: number) =>
   Array.from({ length: n }, (_, i) => ({
     id: `s${i}`,
-    label: ['Unlock cloud vault', 'Sync vault', 'Export items', 'Write backup set', 'Verify checksum', 'Unlock home vault', 'Diff against home', 'Purge home vault', 'Import items'][i % 9],
+    label: STEP_LABELS[i % STEP_LABELS.length],
     state: i < 4 ? 'succeeded' : i === 4 ? 'running' : 'pending',
-    group: i < 5 ? 'alice — cloud' : 'alice — home',
+    group: 'alice@cloud',
     startedAt: new Date(Date.now() - (n - i) * 4000).toISOString(),
     endedAt: i < 4 ? new Date(Date.now() - (n - i) * 3000).toISOString() : undefined,
     detail: i === 2 ? 'exported 412 items, 12 folders' : undefined,
@@ -92,18 +119,23 @@ const jobs = [
   { id: 'd4e5f6a7-b8c9-4d0e-1f2a-3b4c5d6e7f80', createdAt: new Date(Date.now() - 172_800_000).toISOString(), startedAt: new Date(Date.now() - 172_799_000).toISOString(), endedAt: new Date(Date.now() - 172_500_000).toISOString(), state: 'partial', targets: ['alice', 'bob', 'acme-org'], operations: ['backup'], options: {}, steps: steps(7).map((s, i) => ({ ...s, state: i === 5 ? 'warning' : 'succeeded' })), logs: [] },
 ];
 
+const aliceCloud = { status: 'unlocked', serverUrl: config.vaults[0]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 3_600_000).toISOString() };
+const aliceHome = { status: 'locked', serverUrl: config.vaults[1]!.serverUrl, userEmail: 'alice@home.lan', lastSync: new Date(Date.now() - 90_000_000).toISOString() };
+
 const status = {
-  alice: {
-    source: { status: 'unlocked', serverUrl: config.vaults[0]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 3_600_000).toISOString() },
-    dest: { status: 'locked', serverUrl: config.vaults[1]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 90_000_000).toISOString() },
+  alice: { source: aliceCloud, dest: aliceHome },
+  'alice-offsite': {
+    source: aliceCloud,
+    dest: { status: 'unauthenticated', serverUrl: config.vaults[2]!.serverUrl },
   },
+  'acme-org': {
+    source: aliceCloud,
+    dest: { status: 'unlocked', serverUrl: config.vaults[1]!.serverUrl, userEmail: 'alice@home.lan', lastSync: new Date(Date.now() - 7_200_000).toISOString() },
+  },
+  'side-project': { source: aliceCloud, dest: aliceHome },
   bob: {
     source: { status: 'unauthenticated', serverUrl: config.vaults[0]!.serverUrl },
     dest: null,
-  },
-  'acme-org': {
-    source: { status: 'unlocked', serverUrl: config.vaults[0]!.serverUrl, userEmail: 'alice@example.com', lastSync: new Date(Date.now() - 7_200_000).toISOString() },
-    dest: { status: 'unlocked', serverUrl: config.vaults[1]!.serverUrl, lastSync: new Date(Date.now() - 7_200_000).toISOString() },
   },
 };
 
