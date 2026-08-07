@@ -71,7 +71,7 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
     }
   }
 
-  const formId = 'credential-form';
+  const formId = `credential-form-${jobId}`;
   const canSubmit = !!password && (!prompt.needsOtp || !!otp);
 
   return (
