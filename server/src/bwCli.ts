@@ -28,6 +28,50 @@ export interface BwResult {
   exitCode: number;
 }
 
+// `bw export --password` (no inline value) has no non-interactive equivalent — unlike
+// login/unlock/import there is no --passwordfile flag for it, so runBw feeds the password
+// through stdin to the CLI's interactive `inquirer` prompt instead of putting it on argv
+// (which `ps`/`/proc/<pid>/cmdline` could read). Because stdin isn't a real TTY, that prompt
+// can't do a normal in-place redraw and instead re-emits its "prompt + cursor-movement"
+// escape sequence once per byte it reads, flooding the log with dozens of near-identical
+// lines. makeDedupedLogger() strips those escape codes and collapses consecutive duplicates
+// (with a "×N" count) so the UI shows one line instead of a wall of noise — purely cosmetic,
+// it never touches the raw stdout/stderr returned to callers.
+// eslint-disable-next-line no-control-regex
+const ANSI_RE = /\x1b\[[0-9;]*[A-Za-z]/g;
+
+function stripAnsi(line: string): string {
+  return line.replace(ANSI_RE, '');
+}
+
+/**
+ * Wraps onLog for one stream (stdout or stderr) so consecutive identical lines — after ANSI
+ * stripping — collapse into a single "line (×N)" entry instead of being emitted N times.
+ * Lines are held back by one until a different line (or flush()) confirms the run has ended,
+ * so callers must flush() once no more lines are coming (per-chunk and at process close).
+ */
+function makeDedupedLogger(stream: 'stdout' | 'stderr', onLog?: LogCallback): { push: (rawLine: string) => void; flush: () => void } {
+  let pending: string | null = null;
+  let count = 0;
+  function flush(): void {
+    if (pending === null) return;
+    onLog?.(stream, count > 1 ? `${pending} (×${count})` : pending);
+    pending = null;
+    count = 0;
+  }
+  function push(rawLine: string): void {
+    const line = stripAnsi(rawLine);
+    if (line === pending) {
+      count++;
+      return;
+    }
+    flush();
+    pending = line;
+    count = 1;
+  }
+  return { push, flush };
+}
+
 /** Sanitised environment for bw child processes */
 function buildEnv(profileDir: string): NodeJS.ProcessEnv {
   return {
@@ -163,6 +207,9 @@ export async function runBw(
   const stdoutChunks: string[] = [];
   const stderrChunks: string[] = [];
 
+  const stdoutLogger = makeDedupedLogger('stdout', onLog);
+  const stderrLogger = makeDedupedLogger('stderr', onLog);
+
   child.stdout!.setEncoding('utf-8');
   child.stderr!.setEncoding('utf-8');
 
@@ -173,7 +220,7 @@ export async function runBw(
     stdoutBuf = lines.pop() ?? '';
     for (const line of lines) {
       stdoutChunks.push(line);
-      if (!opts.silenceStdout) onLog?.('stdout', redact(line));
+      if (!opts.silenceStdout) stdoutLogger.push(redact(line));
     }
   });
 
@@ -184,7 +231,7 @@ export async function runBw(
     stderrBuf = lines.pop() ?? '';
     for (const line of lines) {
       stderrChunks.push(line);
-      onLog?.('stderr', redact(line));
+      stderrLogger.push(redact(line));
     }
   });
 
@@ -204,12 +251,17 @@ export async function runBw(
       // trailing newline and so never hits the per-line handlers above)
       if (stdoutBuf) {
         stdoutChunks.push(stdoutBuf);
-        if (!opts.silenceStdout) onLog?.('stdout', redact(stdoutBuf));
+        if (!opts.silenceStdout) stdoutLogger.push(redact(stdoutBuf));
       }
       if (stderrBuf) {
         stderrChunks.push(stderrBuf);
-        onLog?.('stderr', redact(stderrBuf));
+        stderrLogger.push(redact(stderrBuf));
       }
+      // The last line seen by each logger is held back until a *different* line arrives
+      // (that's how consecutive duplicates get counted) — with the process now closed, no
+      // more lines are coming, so flush whatever's still pending.
+      stdoutLogger.flush();
+      stderrLogger.flush();
 
       resolve({
         stdout: stdoutChunks.join('\n'),

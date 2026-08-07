@@ -27,7 +27,7 @@ const config = {
   importGuard: { minSourceRatio: 0.5, blockOnEmptySource: true },
   homeLogoutAfterImport: true,
   cliVersion: '2026.7.0',
-  appVersion: '1.5.1',
+  appVersion: '1.5.3',
 };
 
 const ts = (daysAgo: number) => {

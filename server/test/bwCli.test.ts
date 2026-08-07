@@ -38,6 +38,43 @@ describe('runBw silenceStdout', () => {
   });
 });
 
+describe('runBw noisy interactive-prompt output', () => {
+  const PROMPT_BIN = join(__dirname, 'fixtures', 'fake-bw-export-prompt.sh');
+
+  it('collapses consecutive duplicate redraw lines and strips their ANSI escapes', async () => {
+    const prevBin = process.env['BW_BIN'];
+    process.env['BW_BIN'] = PROMPT_BIN;
+    vi.resetModules();
+    try {
+      const { runBw } = await import('../src/bwCli.js');
+      const logged: Array<{ stream: string; line: string }> = [];
+
+      await runBw(
+        ['export', '--format', 'encrypted_json', '--password'],
+        { profileDir: '/tmp', stdin: 'hunter2' },
+        (stream, line) => logged.push({ stream, line }),
+      );
+
+      const stderrLines = logged.filter((l) => l.stream === 'stderr').map((l) => l.line);
+      // 5 identical redraws + 1 distinct "Saved ..." line, not 6 separate log entries.
+      expect(stderrLines).toHaveLength(2);
+      expect(stderrLines[0]).toBe('? Export file password: [input is hidden]  (×5)');
+      expect(stderrLines[0]).not.toMatch(/\x1b/);
+      expect(stderrLines[1]).toBe('Saved /backups/export.json');
+
+      // The raw stderr returned to the caller is untouched — still every line, with escapes.
+      const result = await runBw(
+        ['export', '--format', 'encrypted_json', '--password'],
+        { profileDir: '/tmp', stdin: 'hunter2' },
+      );
+      expect(result.stderr.match(/\[input is hidden\]/g)).toHaveLength(5);
+    } finally {
+      process.env['BW_BIN'] = prevBin;
+      vi.resetModules();
+    }
+  });
+});
+
 describe('runBw raw session key output', () => {
   const RAW_BIN = join(__dirname, 'fixtures', 'fake-bw-raw.sh');
   const FAKE_KEY = 'FakeSessionKeyThatLooksLikeBase64==';
