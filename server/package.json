@@ -1,6 +1,6 @@
 {
   "name": "bitwarden-webui-server",
-  "version": "1.6.3",
+  "version": "1.7.1",
   "private": true,
   "type": "module",
   "main": "dist/index.js",
