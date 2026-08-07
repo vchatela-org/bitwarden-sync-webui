@@ -239,17 +239,34 @@ export function computeSecureDiff(
   sourceItems: Array<Record<string, unknown>>,
   destItems: Array<Record<string, unknown>>,
 ): SecureDiffResult {
-  const srcMap = new Map<string, { item: DiffItem; hashes: CredentialHashes }>();
-  for (const raw of sourceItems) {
-    const item = toDiffItem(raw);
-    srcMap.set(toTuple(item), { item, hashes: hashCredentials(raw) });
-  }
+  // Collect all hashes per identity key — duplicate entries (same name+username) are
+  // sorted before comparing so listing-order differences don't produce false positives.
+  type Bucket = { item: DiffItem; hashList: CredentialHashes[] };
+  const buildMap = (items: Array<Record<string, unknown>>): Map<string, Bucket> => {
+    const map = new Map<string, Bucket>();
+    for (const raw of items) {
+      const item = toDiffItem(raw);
+      const key = toTuple(item);
+      const existing = map.get(key);
+      if (existing) {
+        existing.hashList.push(hashCredentials(raw));
+      } else {
+        map.set(key, { item, hashList: [hashCredentials(raw)] });
+      }
+    }
+    return map;
+  };
 
-  const dstMap = new Map<string, { item: DiffItem; hashes: CredentialHashes }>();
-  for (const raw of destItems) {
-    const item = toDiffItem(raw);
-    dstMap.set(toTuple(item), { item, hashes: hashCredentials(raw) });
-  }
+  const srcMap = buildMap(sourceItems);
+  const dstMap = buildMap(destItems);
+
+  // Reduce a bucket's per-category hashes to one comparable string per category,
+  // sorting so duplicate order doesn't matter.
+  const reduceBucket = (bucket: Bucket): CredentialHashes => {
+    const pick = (field: keyof CredentialHashes): string =>
+      bucket.hashList.map((h) => h[field]).sort().join('|');
+    return { password: pick('password'), totp: pick('totp'), notes: pick('notes'), fields: pick('fields'), card: pick('card') };
+  };
 
   const onlyInSource: DiffItem[] = [];
   const credentialsDiffer: CredentialDiffItem[] = [];
@@ -261,12 +278,14 @@ export function computeSecureDiff(
       onlyInSource.push(src.item);
       continue;
     }
+    const srcH = reduceBucket(src);
+    const dstH = reduceBucket(dst);
     const reasons: CredentialDiffReason[] = [];
-    if (src.hashes.password !== dst.hashes.password) reasons.push('password');
-    if (src.hashes.totp !== dst.hashes.totp) reasons.push('totp');
-    if (src.hashes.notes !== dst.hashes.notes) reasons.push('notes');
-    if (src.hashes.fields !== dst.hashes.fields) reasons.push('fields');
-    if (src.hashes.card !== dst.hashes.card) reasons.push('card');
+    if (srcH.password !== dstH.password) reasons.push('password');
+    if (srcH.totp !== dstH.totp) reasons.push('totp');
+    if (srcH.notes !== dstH.notes) reasons.push('notes');
+    if (srcH.fields !== dstH.fields) reasons.push('fields');
+    if (srcH.card !== dstH.card) reasons.push('card');
     if (reasons.length > 0) {
       credentialsDiffer.push({ ...src.item, reasons });
     } else {
@@ -279,5 +298,5 @@ export function computeSecureDiff(
     if (!srcMap.has(key)) onlyInDest.push(dst.item);
   }
 
-  return { sourceCount: srcMap.size, destCount: dstMap.size, onlyInSource, onlyInDest, credentialsDiffer, identical };
+  return { sourceCount: sourceItems.length, destCount: destItems.length, onlyInSource, onlyInDest, credentialsDiffer, identical };
 }
