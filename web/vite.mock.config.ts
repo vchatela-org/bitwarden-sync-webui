@@ -1,8 +1,12 @@
-// TEMPORARY: local visual harness. Serves fixture data on /api so the UI can be
-// reviewed without a live backend + Bitwarden CLI. Delete after review.
+// Local visual harness: serves fixture data on /api (incl. job-stream websockets)
+// so the UI can be reviewed and screenshotted without a live backend + Bitwarden
+// CLI. Backs `npm run screenshots` (see scripts/screenshots.mjs) — keep this in
+// sync with server/src/api.ts response shapes.
+import { createServer as createHttpServer } from 'node:http';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { WebSocketServer } from 'ws';
 import type { Connect } from 'vite';
 
 const config = {
@@ -103,6 +107,27 @@ const status = {
   },
 };
 
+// Job detail view opens a websocket for live updates. Attaching a raw 'upgrade'
+// listener to Vite's own httpServer races with Vite's HMR websocket (which claims
+// the connection first and rejects it, showing a "lost connection" banner) — so
+// instead we run a tiny companion websocket server on its own port and reach it
+// the same way vite.config.ts reaches the real backend: a `ws: true` dev proxy.
+const STREAM_PORT = 5198;
+const streamServer = createHttpServer();
+const wss = new WebSocketServer({ server: streamServer });
+wss.on('connection', (ws, req) => {
+  ws.on('error', () => { /* React StrictMode opens+closes a throwaway connection on mount; ignore */ });
+  const match = (req.url ?? '').match(/^\/api\/jobs\/([^/?]+)\/stream/);
+  const job = jobs.find((j) => j.id === match?.[1]) ?? jobs[0];
+  // Delay past React StrictMode's dev-only mount→cleanup→mount cycle so we don't
+  // write to the throwaway first connection while it's closing (which the proxy
+  // surfaces as an ECONNRESET the browser reports as a lost connection).
+  setTimeout(() => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: 'snapshot', job }));
+  }, 150);
+});
+streamServer.listen(STREAM_PORT);
+
 function mockApi(): { name: string; configureServer: (s: { middlewares: Connect.Server }) => void } {
   return {
     name: 'mock-api',
@@ -148,5 +173,11 @@ function mockApi(): { name: string; configureServer: (s: { middlewares: Connect.
 
 export default defineConfig({
   plugins: [react(), tailwindcss(), mockApi()],
-  server: { port: 5199 },
+  server: {
+    port: 5199,
+    strictPort: true,
+    proxy: {
+      '^/api/jobs/.*/stream': { target: `ws://localhost:${STREAM_PORT}`, ws: true },
+    },
+  },
 });

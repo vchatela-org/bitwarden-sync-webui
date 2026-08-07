@@ -16,6 +16,24 @@ deployment can sync different targets between different instance pairs at once (
 
 ---
 
+## Screenshots
+
+Fake data — no real vault, credentials or backup ever appears here. Regenerate anytime with
+`npm run screenshots` (see [scripts/screenshots.mjs](scripts/screenshots.mjs)).
+
+<table>
+<tr>
+<td width="50%"><img src="screenshots/01-dashboard.jpg" width="100%" alt="Dashboard: targets table with vault status"><br><sub>Dashboard</sub></td>
+<td width="50%"><img src="screenshots/02-jobs-list.jpg" width="100%" alt="Job history list"><br><sub>Job history</sub></td>
+</tr>
+<tr>
+<td width="50%"><img src="screenshots/03-job-detail.jpg" width="100%" alt="Job detail: step graph and live log output"><br><sub>Job detail</sub></td>
+<td width="50%"><img src="screenshots/04-backups.jpg" width="100%" alt="Backups: inventory, integrity results and retention"><br><sub>Backups</sub></td>
+</tr>
+</table>
+
+---
+
 ## Quick start (local development)
 
 ```bash

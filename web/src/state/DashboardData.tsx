@@ -100,6 +100,7 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
     if (!countJobId) return;
     const ws = openJobStream(countJobId);
     let finished = false;
+    let cancelled = false;
 
     async function finish() {
       if (finished) return;
@@ -132,9 +133,15 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
         if (!isActive(upd.state)) finish();
       }
     };
-    ws.onerror = () => setError('WebSocket error while fetching live item counts');
+    // In dev, React StrictMode mounts this effect twice: the first WebSocket is
+    // closed by cleanup before it finishes connecting, which fires onerror on a
+    // connection we already discarded. Ignore errors once cleanup has run.
+    ws.onerror = () => { if (!cancelled) setError('WebSocket error while fetching live item counts'); };
 
-    return () => ws.close();
+    return () => {
+      cancelled = true;
+      ws.close();
+    };
   }, [countJobId]);
 
   const value = useMemo<DashboardData>(() => ({

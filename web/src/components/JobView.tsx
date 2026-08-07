@@ -43,6 +43,7 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
   }, [loadJob]);
 
   useEffect(() => {
+    let cancelled = false;
     const ws = openJobStream(jobId);
 
     ws.onmessage = (evt) => {
@@ -66,9 +67,15 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
       }
     };
 
-    ws.onerror = () => setError('Lost the live connection to this job. Reload to reconnect.');
+    // In dev, React StrictMode mounts this effect twice: the first WebSocket is
+    // closed by cleanup before it finishes connecting, which fires onerror on a
+    // connection we already discarded. Ignore errors once cleanup has run.
+    ws.onerror = () => { if (!cancelled) setError('Lost the live connection to this job. Reload to reconnect.'); };
 
-    return () => ws.close();
+    return () => {
+      cancelled = true;
+      ws.close();
+    };
   }, [jobId]);
 
   async function handleCancel() {
