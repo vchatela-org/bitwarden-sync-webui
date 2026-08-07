@@ -132,7 +132,7 @@ jobs:
 
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             git fetch --depth 1 origin "$BRANCH"
-            git checkout "$BRANCH"
+            git checkout -b "$BRANCH" FETCH_HEAD
           else
             git checkout --orphan "$BRANCH"
             git rm -rf . >/dev/null 2>&1 || true
