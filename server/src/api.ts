@@ -42,6 +42,7 @@ import { getBwStatus } from './session.js';
 import { getLiveCounts } from './liveCounts.js';
 import { profileDir, allTargetKeys, Config, ConfigLoadResult } from './config.js';
 import { getCliVersion } from './bwCli.js';
+import { getAppVersion } from './version.js';
 
 export function createApp(configResult: ConfigLoadResult): ReturnType<typeof createServer> {
   const app = express();
@@ -122,6 +123,7 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
       importGuard: config.importGuard,
       homeLogoutAfterImport: config.homeLogoutAfterImport,
       cliVersion,
+      appVersion: getAppVersion(),
     });
   });
 

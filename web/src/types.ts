@@ -97,6 +97,7 @@ export interface AppConfig {
   importGuard: { minSourceRatio: number; blockOnEmptySource: boolean };
   homeLogoutAfterImport: boolean;
   cliVersion: string;
+  appVersion: string;
 }
 
 export interface BackupFile {

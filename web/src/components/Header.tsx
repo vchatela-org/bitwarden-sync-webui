@@ -33,11 +33,18 @@ export function Header({ config, onLogout, currentPage, onNavigate }: Props) {
           </div>
           <span className="text-[13px] font-semibold tracking-tight text-fg">Bitwarden Sync</span>
           {config && (
-            <Tooltip content="Pinned Bitwarden CLI version">
-              <span className="hidden rounded-md border border-line bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle sm:inline">
-                bw {config.cliVersion}
-              </span>
-            </Tooltip>
+            <div className="hidden items-center gap-1 sm:flex">
+              <Tooltip content="Pinned Bitwarden CLI version">
+                <span className="rounded-md border border-line bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle">
+                  bw {config.cliVersion}
+                </span>
+              </Tooltip>
+              <Tooltip content="Bitwarden Sync Web UI version">
+                <span className="rounded-md border border-line bg-elevated px-1.5 py-0.5 font-mono text-[10px] text-fg-subtle">
+                  v{config.appVersion}
+                </span>
+              </Tooltip>
+            </div>
           )}
         </div>
 

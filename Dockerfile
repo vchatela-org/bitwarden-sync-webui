@@ -53,6 +53,8 @@ WORKDIR /app
 
 # Copy compiled server + pre-built SPA (in dist/public)
 COPY --from=server-builder /app/server/dist ./dist
+# Read at runtime by version.ts to report the app version alongside the bw CLI version
+COPY --from=server-builder /app/server/package.json ./package.json
 # npm workspaces hoist all dependencies to the root node_modules, not server/node_modules
 COPY --from=server-builder /app/node_modules ./node_modules
 COPY --from=web-builder /app/server/dist/public ./dist/public
