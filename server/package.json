@@ -13,7 +13,7 @@
   },
   "dependencies": {
     "argon2": "^0.45.1",
-    "cookie": "^1.0.2",
+    "cookie": "^2.0.1",
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.1",
