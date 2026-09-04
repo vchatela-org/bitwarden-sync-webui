@@ -1,5 +1,5 @@
 # ─── Build stage: compile web SPA ────────────────────────────────────────────
-FROM node:25-alpine AS web-builder
+FROM node:26-alpine AS web-builder
 WORKDIR /app
 COPY web/package.json ./web/
 COPY package.json package-lock.json ./
@@ -8,7 +8,7 @@ COPY web/ ./web/
 RUN npm run build --workspace=web
 
 # ─── Build stage: compile TypeScript server ───────────────────────────────────
-FROM node:25-alpine AS server-builder
+FROM node:26-alpine AS server-builder
 WORKDIR /app
 COPY server/package.json ./server/
 COPY package.json package-lock.json ./
@@ -17,7 +17,7 @@ COPY server/ ./server/
 RUN npm run build --workspace=server
 
 # ─── Runtime stage ────────────────────────────────────────────────────────────
-FROM node:25-alpine AS runtime
+FROM node:26-alpine AS runtime
 
 # The bw CLI version is pinned in docker/bw-cli/package.json instead of inline
 # here: Dependabot's docker updater only rewrites FROM tags and never looks at ARG
@@ -34,7 +34,7 @@ COPY docker/bw-cli/package.json /tmp/bw-cli-pin.json
 # called after this point, and npm vendors its own (frequently vulnerable) copies
 # of tar/brace-expansion/sigstore/etc. that otherwise sit unused in the final image.
 # Also apply pending Alpine package patches (e.g. libssl/libcrypto point fixes that
-# lag the node:25-alpine base tag).
+# lag the node:26-alpine base tag).
 RUN BW_CLI_VERSION="${BW_CLI_VERSION:-$(node -p "require('/tmp/bw-cli-pin.json').dependencies['@bitwarden/cli'].replace(/^[^0-9]*/, '')")}" \
  && npm install -g @bitwarden/cli@${BW_CLI_VERSION} \
  && bw --version \
