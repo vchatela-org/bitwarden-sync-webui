@@ -34,7 +34,7 @@ COPY docker/bw-cli/package.json /tmp/bw-cli-pin.json
 # called after this point, and npm vendors its own (frequently vulnerable) copies
 # of tar/brace-expansion/sigstore/etc. that otherwise sit unused in the final image.
 # Also apply pending Alpine package patches (e.g. libssl/libcrypto point fixes that
-# lag the node:25-alpine base tag).
+# lag the node:26-alpine base tag).
 RUN BW_CLI_VERSION="${BW_CLI_VERSION:-$(node -p "require('/tmp/bw-cli-pin.json').dependencies['@bitwarden/cli'].replace(/^[^0-9]*/, '')")}" \
  && npm install -g @bitwarden/cli@${BW_CLI_VERSION} \
  && bw --version \
