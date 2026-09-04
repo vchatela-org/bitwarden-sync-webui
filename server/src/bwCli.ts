@@ -192,6 +192,12 @@ export async function runBw(
 
   const child = spawn(BW_BIN, finalArgs, spawnOpts);
 
+  // The child can exit before it ever reads stdin (a bad argument, or a prompt it decides
+  // it doesn't need), which makes the write below fail with EPIPE. Without a listener that
+  // is an unhandled 'error' event on the stream, which takes the whole process down — so
+  // swallow it: the child is already gone and its exit code is what we report.
+  child.stdin!.on('error', () => { /* child closed stdin before we finished writing */ });
+
   // Write stdin if provided
   if (opts.stdin !== undefined) {
     child.stdin!.write(opts.stdin + '\n');

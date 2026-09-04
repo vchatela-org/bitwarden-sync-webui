@@ -109,3 +109,29 @@ describe('runBw raw session key output', () => {
     }
   });
 });
+
+describe('runBw when the child exits before reading stdin', () => {
+  const EXIT_EARLY_BIN = join(__dirname, 'fixtures', 'fake-bw-exit-early.sh');
+
+  it('reports the child\'s exit instead of dying on the EPIPE from the closed pipe', async () => {
+    const prevBin = process.env['BW_BIN'];
+    process.env['BW_BIN'] = EXIT_EARLY_BIN;
+    vi.resetModules();
+    try {
+      const { runBw } = await import('../src/bwCli.js');
+
+      // Big enough that the write cannot complete in one go, so it is still in flight
+      // when the child exits and the read end of the pipe goes away.
+      const result = await runBw(
+        ['export', '--password'],
+        { profileDir: '/tmp', stdin: 'x'.repeat(1024 * 1024) },
+      );
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('Not enough arguments.');
+    } finally {
+      process.env['BW_BIN'] = prevBin;
+      vi.resetModules();
+    }
+  });
+});
