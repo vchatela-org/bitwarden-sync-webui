@@ -1,0 +1,133 @@
+name: 🏷️ Release on Bitwarden CLI bump
+
+# Dependabot bumps the CLI pin in docker/bw-cli/package.json (see .github/dependabot.yml).
+# Merging that PR changes what the image ships but not the app version, so nothing is
+# published. This cuts the patch release for it: bump, tag, and hand off to the image
+# publishers. Triggered on the file rather than on the Dependabot actor because a squash
+# merge does not reliably preserve `dependabot[bot]` as the author of the commit on main.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "docker/bw-cli/package.json"
+
+permissions:
+  contents: write
+  # Required by the final step to start the publish workflows; see the note there.
+  actions: write
+
+concurrency:
+  group: release-on-bw-cli-bump
+  cancel-in-progress: false
+
+jobs:
+  check:
+    name: 🔍 Did the pin actually move?
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.pin.outputs.changed }}
+      version: ${{ steps.pin.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 2
+
+      - name: Compare the pin against its previous value
+        id: pin
+        run: |
+          set -euo pipefail
+          read_pin() { node -p "JSON.parse(require('fs').readFileSync(0,'utf8')).dependencies['@bitwarden/cli']"; }
+
+          NEW=$(read_pin < docker/bw-cli/package.json)
+          OLD=$(git show 'HEAD~1:docker/bw-cli/package.json' 2>/dev/null | read_pin 2>/dev/null || echo '')
+          echo "Bitwarden CLI pin: '${OLD:-<none>}' -> '$NEW'"
+
+          # The path filter also fires on edits to the manifest's description or name,
+          # and on the commit that first introduces the manifest. Only an actual version
+          # move is worth a release.
+          if [ -z "$OLD" ]; then
+            echo "Pin file is new — nothing to compare against, so no release." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          elif [ "$NEW" = "$OLD" ]; then
+            echo "Pin unchanged — no release." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          fi
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+
+  release:
+    name: 🏷️ Cut the patch release
+    runs-on: ubuntu-latest
+    needs: check
+    if: needs.check.outputs.changed == 'true'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Set up Node
+        uses: actions/setup-node@v7
+        with:
+          # Matches the node:25-alpine base the image is built on.
+          node-version: "25"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Bump the patch version
+        id: bump
+        run: echo "version=$(node scripts/bump-version.mjs patch)" >> "$GITHUB_OUTPUT"
+
+      # A broken build must not get a tag; the publish workflows build from the tag.
+      - name: Build
+        run: npm run build
+
+      - name: Test
+        run: npm test
+
+      - name: Commit and tag
+        id: tag
+        env:
+          APP_VERSION: ${{ steps.bump.outputs.version }}
+          BW_VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -euo pipefail
+          TAG="v${APP_VERSION}"
+          if git rev-parse -q --verify "refs/tags/${TAG}" >/dev/null; then
+            echo "::error::${TAG} already exists — resolve the version conflict by hand."
+            exit 1
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          SUBJECT="${TAG}: bump Bitwarden CLI to ${BW_VERSION}"
+          # Stage exactly the files the bump touches — never `git add -A`.
+          git add package.json package-lock.json server/package.json web/package.json web/vite.mock.config.ts
+          git commit -m "${SUBJECT}"
+          git tag -a "${TAG}" -m "${SUBJECT}"
+          git push origin HEAD:main --follow-tags
+
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "Released **${TAG}** with Bitwarden CLI ${BW_VERSION}." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish the image for the new tag
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          # A tag pushed with GITHUB_TOKEN does not start workflows listening on
+          # `push: tags` — GitHub suppresses those to prevent recursive runs, and
+          # workflow_dispatch is one of the two documented exceptions. So start the
+          # publishers explicitly against the tag ref; docker/metadata-action keys its
+          # semver tags off the ref, not the event, so the image tags come out the same
+          # as on a hand-pushed release. (Swapping GITHUB_TOKEN for a PAT on the push
+          # above would let both fire on their own and make this step unnecessary.)
+          gh workflow run ghcr-publish.yml --ref "$TAG"
+          gh workflow run docker-build-push.yml --ref "$TAG"

@@ -87,11 +87,45 @@ All tests are in `server/test/`. They run with Vitest and need no network or rea
 docker build -t bitwarden-webui:latest .
 ```
 
-Override the Bitwarden CLI version:
+### Bitwarden CLI version
+
+The `bw` version baked into the image is pinned in
+[`docker/bw-cli/package.json`](docker/bw-cli/package.json). That file exists only to hold the pin —
+nothing is ever installed from it. The Dockerfile reads the version out of it at build time, and
+Dependabot watches it as an npm manifest so a new `@bitwarden/cli` release shows up as a bump PR.
+(Dependabot's docker updater only rewrites `FROM` tags, so a plain `ARG` in the Dockerfile would
+never be updated.)
+
+Keep the pin exact — no `^` or `~` — so image builds stay reproducible.
+
+Override it for a one-off build:
 
 ```bash
 docker build --build-arg BW_CLI_VERSION=2026.7.0 -t bitwarden-webui:latest .
 ```
+
+Merging the Dependabot PR cuts a release on its own — see below.
+
+### Automated release on a CLI bump
+
+A Dependabot bump changes what the image ships without touching the app version, so on its
+own nothing would ever get published. [`release-on-bw-cli-bump.yml`](.github/workflows/release-on-bw-cli-bump.yml)
+closes that gap: when `docker/bw-cli/package.json` lands on `main` with a genuinely different
+version, it bumps the **patch** version across the workspace (1.7.3 -> 1.7.4), runs the build and
+test suite, commits, pushes an annotated `vX.Y.Z` tag, and starts the two image publishes.
+
+It triggers on the file rather than on the `dependabot[bot]` actor, because a squash merge
+does not reliably keep Dependabot as the author of the commit that reaches `main`. A hand-edit
+that bumps the pin therefore releases too — an edit that only touches the manifest's
+description does not.
+
+It starts `ghcr-publish.yml` and `docker-build-push.yml` explicitly instead of letting the tag
+push do it. GitHub suppresses workflow runs for events created with the default `GITHUB_TOKEN`,
+so a tag pushed by CI never fires a `push: tags` trigger; `workflow_dispatch` is one of the two
+documented exceptions. Giving the push step a PAT instead would let both publishers fire on
+their own and make that step unnecessary.
+
+Releases cut by hand are unaffected and still work the way they always have.
 
 The published image is also available at `ghcr.io/vchatela-org/bitwarden-sync-webui` (tags: `latest`
 and semver versions) — see [Packages](https://github.com/vchatela-org/bitwarden-sync-webui/pkgs/container/bitwarden-sync-webui).
@@ -335,7 +369,7 @@ them, and report the results without modifying either side.
 | `LOG_LEVEL` | `info` | Log verbosity |
 | `NODE_EXTRA_CA_CERTS` | — | Path to extra CA bundle (for internal TLS) |
 | `TRUST_PROXY` | — | Set `1` when behind an HTTP reverse proxy |
-| `BW_CLI_PINNED_VERSION` | (from Dockerfile build arg) | Asserted at boot |
+| `BW_CLI_PINNED_VERSION` | (from `docker/bw-cli/package.json`) | Asserted at boot |
 | `BW_FIFO_DIR` | `/run/bw-fifo` | tmpfs directory for password FIFOs |
 | `PASSWORD_TTL_MS` | `900000` | Idle TTL for cached master passwords (15 min) |
 

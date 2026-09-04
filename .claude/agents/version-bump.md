@@ -17,7 +17,12 @@ You handle version releases for this repo (bitwarden-sync-webui, an npm workspac
    - Read the current version from root `package.json`.
    - Ask the user for the target version if not given, or infer a patch/minor/major bump from what changed. Follow semver.
 
-3. **Bump version numbers** in exactly these 4 files, keeping them in sync:
+3. **Bump version numbers** — run `node scripts/bump-version.mjs <major|minor|patch|X.Y.Z>`, which
+   performs steps 3 and 4 below and prints the resolved version. The same script runs in
+   `.github/workflows/release-on-bw-cli-bump.yml`, so automated and hand-cut releases produce an
+   identical diff. Only do it by hand if the script fails; what it edits, and why, is:
+
+   The 4 files that carry the version, kept in sync:
    - `package.json` (root)
    - `server/package.json`
    - `web/package.json`
