@@ -16,6 +16,17 @@ RUN npm ci --workspace=server
 COPY server/ ./server/
 RUN npm run build --workspace=server
 
+# ─── Dependency stage: the production-only tree the runtime ships ─────────────
+# Separate from server-builder because that stage needs devDependencies to compile
+# and the runtime must not carry them. They are not just dead weight: tsx and
+# vitest pull in esbuild, whose 11 MB Go binary is what the image vulnerability
+# scan trips over, and TypeScript adds another 27 MB nobody runs in production.
+FROM node:26-alpine AS prod-deps
+WORKDIR /app
+COPY server/package.json ./server/
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev --workspace=server
+
 # ─── Runtime stage ────────────────────────────────────────────────────────────
 FROM node:26-alpine AS runtime
 
@@ -65,8 +76,9 @@ WORKDIR /app
 COPY --from=server-builder /app/server/dist ./dist
 # Read at runtime by version.ts to report the app version alongside the bw CLI version
 COPY --from=server-builder /app/server/package.json ./package.json
-# npm workspaces hoist all dependencies to the root node_modules, not server/node_modules
-COPY --from=server-builder /app/node_modules ./node_modules
+# npm workspaces hoist all dependencies to the root node_modules, not server/node_modules.
+# Taken from prod-deps, not server-builder: the latter's tree includes devDependencies.
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=web-builder /app/server/dist/public ./dist/public
 
 # Create runtime directories that will be mount-points in the pod
