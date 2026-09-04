@@ -1,0 +1,9 @@
+{
+  "name": "bitwarden-webui-bw-cli-pin",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Version pin for the Bitwarden CLI installed into the runtime image. Not a workspace and never installed from here — the Dockerfile reads the version out of this file, and Dependabot's npm updater opens a bump PR when @bitwarden/cli publishes a release. Keep the version exact (no ^ or ~) so the image build stays reproducible.",
+  "dependencies": {
+    "@bitwarden/cli": "2026.7.0"
+  }
+}

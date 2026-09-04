@@ -10,6 +10,15 @@ updates:
     schedule:
       interval: "weekly"
 
+  # Bitwarden CLI version pin baked into the runtime image. It lives in an npm
+  # manifest because the docker updater below only rewrites FROM tags, so an
+  # ARG in the Dockerfile would never get a bump PR. The Dockerfile reads the
+  # version out of that manifest at build time.
+  - package-ecosystem: "npm"
+    directory: "/docker/bw-cli"
+    schedule:
+      interval: "weekly"
+
   - package-ecosystem: "docker"
     directory: "/"
     schedule:

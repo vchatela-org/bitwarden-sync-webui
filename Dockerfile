@@ -19,16 +19,24 @@ RUN npm run build --workspace=server
 # ─── Runtime stage ────────────────────────────────────────────────────────────
 FROM node:25-alpine AS runtime
 
-ARG BW_CLI_VERSION=2026.7.0
+# The bw CLI version is pinned in docker/bw-cli/package.json instead of inline
+# here: Dependabot's docker updater only rewrites FROM tags and never looks at ARG
+# values, so the pin has to sit in a manifest its npm updater understands for a
+# bump PR to be opened when @bitwarden/cli publishes a release. Left empty, the
+# build resolves that pin; pass --build-arg BW_CLI_VERSION=x.y.z to override it.
+ARG BW_CLI_VERSION=
 ARG UID=1000
 
-# Install the Bitwarden CLI at a pinned version, then strip npm itself out of the
+COPY docker/bw-cli/package.json /tmp/bw-cli-pin.json
+
+# Install the Bitwarden CLI at the pinned version, then strip npm itself out of the
 # runtime image: `bw` is a self-contained bundle invoked directly, npm is never
 # called after this point, and npm vendors its own (frequently vulnerable) copies
 # of tar/brace-expansion/sigstore/etc. that otherwise sit unused in the final image.
 # Also apply pending Alpine package patches (e.g. libssl/libcrypto point fixes that
 # lag the node:25-alpine base tag).
-RUN npm install -g @bitwarden/cli@${BW_CLI_VERSION} \
+RUN BW_CLI_VERSION="${BW_CLI_VERSION:-$(node -p "require('/tmp/bw-cli-pin.json').dependencies['@bitwarden/cli'].replace(/^[^0-9]*/, '')")}" \
+ && npm install -g @bitwarden/cli@${BW_CLI_VERSION} \
  && bw --version \
  && echo "Installed bw $(bw --version)" \
  # CVE-2026-44705: patch the CLI's own vendored tmp@0.0.33 (pulled in by inquirer's
@@ -44,10 +52,12 @@ RUN npm install -g @bitwarden/cli@${BW_CLI_VERSION} \
  && rm -rf /usr/local/lib/node_modules/@bitwarden/cli/node_modules/external-editor/node_modules/tmp \
  && npm uninstall -g npm corepack \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /root/.npm \
- && apk upgrade --no-cache
-
-# Store the pinned version so the app can assert it at boot
-ENV BW_CLI_PINNED_VERSION=${BW_CLI_VERSION}
+ && apk upgrade --no-cache \
+ # Record the resolved pin so the app can assert it at boot. ENV can't take a value
+ # computed inside a RUN, so entrypoint.sh reads this file and exports it as
+ # BW_CLI_PINNED_VERSION unless that variable is already set in the environment.
+ && printf '%s' "${BW_CLI_VERSION}" > /etc/bw-cli-version \
+ && rm /tmp/bw-cli-pin.json
 
 WORKDIR /app
 
