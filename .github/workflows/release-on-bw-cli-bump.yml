@@ -10,6 +10,15 @@ on:
     branches: [main]
     paths:
       - "docker/bw-cli/package.json"
+  # Escape hatch for when the automatic run does not produce a release: the pin
+  # moved but the job failed, so the tag was never cut and re-running would just
+  # replay the same commit. `force` skips the did-the-pin-move gate below.
+  workflow_dispatch:
+    inputs:
+      force:
+        description: "Release the current pin even though it did not move in the last commit"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -46,7 +55,10 @@ jobs:
           # The path filter also fires on edits to the manifest's description or name,
           # and on the commit that first introduces the manifest. Only an actual version
           # move is worth a release.
-          if [ -z "$OLD" ]; then
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "Forced via workflow_dispatch — releasing pin '$NEW' regardless." >> "$GITHUB_STEP_SUMMARY"
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          elif [ -z "$OLD" ]; then
             echo "Pin file is new — nothing to compare against, so no release." >> "$GITHUB_STEP_SUMMARY"
             echo "changed=false" >> "$GITHUB_OUTPUT"
           elif [ "$NEW" = "$OLD" ]; then
@@ -72,8 +84,8 @@ jobs:
       - name: Set up Node
         uses: actions/setup-node@v7
         with:
-          # Matches the node:25-alpine base the image is built on.
-          node-version: "25"
+          # Matches the node:26-alpine base the image is built on.
+          node-version: "26"
           cache: npm
 
       - name: Install dependencies
