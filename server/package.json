@@ -13,21 +13,17 @@
   },
   "dependencies": {
     "argon2": "^0.45.1",
-    "cookie": "^1.0.2",
     "cookie-parser": "^1.4.7",
     "express": "^5.2.1",
     "express-rate-limit": "^8.6.1",
     "helmet": "^8.0.0",
-    "uuid": "^11.1.0",
     "ws": "^8.18.0",
     "zod": "^4.4.3"
   },
   "devDependencies": {
-    "@types/cookie": "^0.6.0",
     "@types/cookie-parser": "^1.4.8",
     "@types/express": "^5.0.0",
     "@types/node": "^26.1.2",
-    "@types/uuid": "^11.0.0",
     "@types/ws": "^8.5.14",
     "tsx": "^4.19.3",
     "typescript": "^5.8.3",
