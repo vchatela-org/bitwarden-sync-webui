@@ -93,7 +93,19 @@ jobs:
 
       - name: Bump the patch version
         id: bump
-        run: echo "version=$(node scripts/bump-version.mjs patch)" >> "$GITHUB_OUTPUT"
+        run: |
+          set -euo pipefail
+          # package.json can sit behind the tags. v1.7.6 was tagged by hand onto the
+          # vitest bump, which left package.json at 1.7.5, so the patch bump after the
+          # next CLI bump resolved straight onto an already-published tag and the whole
+          # release died at the tag step. Step over whatever is already taken instead.
+          for _ in $(seq 1 20); do
+            VERSION=$(node scripts/bump-version.mjs patch)
+            git rev-parse -q --verify "refs/tags/v${VERSION}" >/dev/null || break
+            echo "::warning::v${VERSION} is already tagged — trying the next patch."
+          done
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "Release version resolves to **v${VERSION}**." >> "$GITHUB_STEP_SUMMARY"
 
       # A broken build must not get a tag; the publish workflows build from the tag.
       - name: Build
