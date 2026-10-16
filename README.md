@@ -2,7 +2,6 @@
 
 [![CodeQL](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/codeql.yml/badge.svg)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/codeql.yml)
 [![GHCR Publish](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/ghcr-publish.yml/badge.svg)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/ghcr-publish.yml)
-[![Docker Build & Push](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/docker-build-push.yml/badge.svg)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/docker-build-push.yml)
 [![Dependabot](https://img.shields.io/badge/Dependabot-enabled-brightgreen?logo=dependabot)](.github/dependabot.yml)
 [![Vulnerabilities](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/vchatela-org/bitwarden-sync-webui/badges/vuln-badge.json)](https://github.com/vchatela-org/bitwarden-sync-webui/actions/workflows/ghcr-publish.yml)
 
@@ -112,20 +111,25 @@ A Dependabot bump changes what the image ships without touching the app version,
 own nothing would ever get published. [`release-on-bw-cli-bump.yml`](.github/workflows/release-on-bw-cli-bump.yml)
 closes that gap: when `docker/bw-cli/package.json` lands on `main` with a genuinely different
 version, it bumps the **patch** version across the workspace (1.7.3 -> 1.7.4), runs the build and
-test suite, commits, pushes an annotated `vX.Y.Z` tag, and starts the two image publishes.
+test suite, commits, pushes an annotated `vX.Y.Z` tag, and starts the image publish.
 
 It triggers on the file rather than on the `dependabot[bot]` actor, because a squash merge
 does not reliably keep Dependabot as the author of the commit that reaches `main`. A hand-edit
 that bumps the pin therefore releases too — an edit that only touches the manifest's
 description does not.
 
-It starts `ghcr-publish.yml` and `docker-build-push.yml` explicitly instead of letting the tag
+It starts `ghcr-publish.yml` explicitly instead of letting the tag
 push do it. GitHub suppresses workflow runs for events created with the default `GITHUB_TOKEN`,
 so a tag pushed by CI never fires a `push: tags` trigger; `workflow_dispatch` is one of the two
-documented exceptions. Giving the push step a PAT instead would let both publishers fire on
-their own and make that step unnecessary.
+documented exceptions. Giving the push step a PAT instead would let the publisher fire on
+its own and make that step unnecessary.
 
 Releases cut by hand are unaffected and still work the way they always have.
+
+Either way, once the image of a tag is published, `ghcr-publish.yml` publishes its GitHub
+Release, listing the PRs merged since the previous tag. Those are the notes Renovate shows in
+the homelab's bump PR: it finds this repository from the image's
+`org.opencontainers.image.source` label. Write PR titles as what the release brings.
 
 The published image is also available at `ghcr.io/vchatela-org/bitwarden-sync-webui` (tags: `latest`
 and semver versions) — see [Packages](https://github.com/vchatela-org/bitwarden-sync-webui/pkgs/container/bitwarden-sync-webui).

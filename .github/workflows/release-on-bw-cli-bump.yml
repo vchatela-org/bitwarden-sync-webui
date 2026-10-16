@@ -22,7 +22,7 @@ on:
 
 permissions:
   contents: write
-  # Required by the final step to start the publish workflows; see the note there.
+  # Required by the final step to start the publish workflow; see the note there.
   actions: write
 
 concurrency:
@@ -149,9 +149,10 @@ jobs:
           # A tag pushed with GITHUB_TOKEN does not start workflows listening on
           # `push: tags` — GitHub suppresses those to prevent recursive runs, and
           # workflow_dispatch is one of the two documented exceptions. So start the
-          # publishers explicitly against the tag ref; docker/metadata-action keys its
+          # publisher explicitly against the tag ref; docker/metadata-action keys its
           # semver tags off the ref, not the event, so the image tags come out the same
-          # as on a hand-pushed release. (Swapping GITHUB_TOKEN for a PAT on the push
-          # above would let both fire on their own and make this step unnecessary.)
+          # as on a hand-pushed release, and it publishes the GitHub Release the same
+          # way too. (Swapping GITHUB_TOKEN for a PAT on the push above would let it
+          # fire on its own and make this step unnecessary.) The Harbor publisher this
+          # also started is gone: dispatching it now fails the run after the tag.
           gh workflow run ghcr-publish.yml --ref "$TAG"
-          gh workflow run docker-build-push.yml --ref "$TAG"
