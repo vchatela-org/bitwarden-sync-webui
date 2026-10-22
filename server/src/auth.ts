@@ -10,6 +10,20 @@ const CSRF_COOKIE = 'bw_csrf';
 const sessions = new Map<string, number>();
 const SESSION_TTL_MS = 8 * 60 * 60 * 1000; // 8 hours
 
+/**
+ * UI_EXTERNAL_AUTH=1: a reverse proxy (Authentik forward auth) is the only gate.
+ * The app shows no sign-in page and accepts every request; the CSRF check stays.
+ * Cannot be combined with UI_PASSWORD or UI_PASSWORD_HASH (see assertAuthConfig).
+ */
+export const EXTERNAL_AUTH = process.env['UI_EXTERNAL_AUTH'] === '1';
+
+/** Refuse to start when external auth and an app password are both configured. */
+export function assertAuthConfig(): void {
+  if (EXTERNAL_AUTH && (process.env['UI_PASSWORD'] || process.env['UI_PASSWORD_HASH'])) {
+    throw new Error('UI_EXTERNAL_AUTH=1 cannot be combined with UI_PASSWORD or UI_PASSWORD_HASH');
+  }
+}
+
 // Sessions are persisted to disk so a server/container restart doesn't force everyone to log in again.
 const DATA_DIR = process.env['DATA_DIR'] ?? '/data';
 const SESSIONS_FILE = join(DATA_DIR, 'sessions.json');
@@ -72,6 +86,24 @@ export function createSession(res: Response, req: Request): string {
   return csrfToken;
 }
 
+/**
+ * External-auth mode has no session to hand a CSRF token out of, so the CSRF
+ * cookie is issued on its own, once, and reused by the browser's later requests.
+ */
+export function ensureCsrfCookie(req: Request, res: Response): string {
+  const existing = req.cookies?.[CSRF_COOKIE];
+  if (existing) return existing;
+  const csrfToken = generateToken(16);
+  res.cookie(CSRF_COOKIE, csrfToken, {
+    httpOnly: false,
+    sameSite: 'strict',
+    secure: isSecure(req),
+    maxAge: SESSION_TTL_MS,
+    path: '/',
+  });
+  return csrfToken;
+}
+
 export function destroySession(req: Request, res: Response): void {
   const token = req.cookies?.[SESSION_COOKIE];
   if (token) {
@@ -83,6 +115,7 @@ export function destroySession(req: Request, res: Response): void {
 }
 
 export function isAuthenticated(req: Request): boolean {
+  if (EXTERNAL_AUTH) return true;
   const token = req.cookies?.[SESSION_COOKIE];
   if (!token) return false;
   const expiry = sessions.get(token);

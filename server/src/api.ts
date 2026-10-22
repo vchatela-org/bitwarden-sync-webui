@@ -16,6 +16,8 @@ import {
   getCsrfToken,
   verifyUiPassword,
   loadPersistedSessions,
+  EXTERNAL_AUTH,
+  ensureCsrfCookie,
 } from './auth.js';
 import {
   createJob,
@@ -83,6 +85,10 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
   const authLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20 });
 
   app.post('/api/auth/login', authLimiter, async (req: Request, res: Response): Promise<void> => {
+    if (EXTERNAL_AUTH) {
+      res.status(404).json({ error: 'Sign-in is disabled: UI_EXTERNAL_AUTH=1' });
+      return;
+    }
     const { password } = req.body as { password?: string };
     if (!password || typeof password !== 'string') {
       res.status(400).json({ error: 'Password required' });
@@ -103,6 +109,10 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
   });
 
   app.get('/api/auth/me', (req: Request, res: Response): void => {
+    if (EXTERNAL_AUTH) {
+      res.json({ authenticated: true, csrfToken: ensureCsrfCookie(req, res) });
+      return;
+    }
     const authenticated = isAuthenticated(req);
     res.json({ authenticated, csrfToken: authenticated ? getCsrfToken(req) : null });
   });
