@@ -365,6 +365,7 @@ them, and report the results without modifying either side.
 | `DATA_DIR` | `/data` | Directory for CLI profiles, job history + backup count cache |
 | `UI_PASSWORD_HASH` | — | Argon2id hash of the UI password (preferred) |
 | `UI_PASSWORD` | — | Plaintext UI password (dev only) |
+| `UI_EXTERNAL_AUTH` | — | `1` when a reverse proxy (Authentik forward auth) is the only gate: no sign-in page. Refuses to start if a UI password is also set |
 | `SESSION_SECRET` | random | Cookie signing secret — set in production |
 | `LOG_LEVEL` | `info` | Log verbosity |
 | `NODE_EXTRA_CA_CERTS` | — | Path to extra CA bundle (for internal TLS) |

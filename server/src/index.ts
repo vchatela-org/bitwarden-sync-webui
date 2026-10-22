@@ -2,6 +2,7 @@ import { createApp } from './api.js';
 import { loadConfig } from './config.js';
 import { assertCliVersion } from './bwCli.js';
 import { migrateLegacyBackupNames } from './backups.js';
+import { assertAuthConfig } from './auth.js';
 
 const PORT = parseInt(process.env['PORT'] ?? '3000', 10);
 const CONFIG_PATH = process.env['CONFIG_PATH'];
@@ -10,6 +11,8 @@ const CONFIG_PATH = process.env['CONFIG_PATH'];
 (process as NodeJS.Process & { setrlimit?: (r: string, l: object) => void }).setrlimit?.('core', { soft: 0, hard: 0 });
 
 async function main(): Promise<void> {
+  assertAuthConfig();
+
   const configResult = loadConfig(CONFIG_PATH);
   if (!configResult.ok) {
     console.error(`[startup] Config error: ${configResult.error}`);
