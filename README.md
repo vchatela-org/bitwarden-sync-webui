@@ -244,6 +244,18 @@ syncs whose other endpoint is a different account, it offers a *"use this passwo
 checkbox — so one person with the same master password on both sides still types it once. Nothing
 about shared secrets is written into the config.
 
+### Unanswered prompts and the job queue
+
+Only one job runs at a time; the rest wait in a queue. A job that needs a master password or a
+pre-import confirmation therefore holds the queue until the prompt is answered — which is why the
+credential/confirmation modal is shown from every page, not just the job detail view.
+
+A prompt has a timeout (30 minutes by default, `confirmTimeout` per job). When it expires unanswered
+the **run stops** instead of moving on to prompt for the next account: nobody is at the keyboard, so
+re-prompting would hold the queue for one timeout per account. The job ends `failed`, its log says
+which prompt went unanswered, and the next queued job starts. Start a fresh run when you are ready
+to type the passwords.
+
 ## Generating the UI password hash
 
 ```bash
