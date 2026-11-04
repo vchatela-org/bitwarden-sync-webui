@@ -67,6 +67,10 @@ export interface CredentialPrompt {
   otpMethod?: number;
   /** The code field is showing because the account is configured `otp: "required"`. */
   otpHinted?: boolean;
+  /** The code may be left empty — only used if the profile's saved sign-in has expired. */
+  otpOptional?: boolean;
+  /** A password is already cached; leaving the field empty reuses it. */
+  passwordCached?: boolean;
   /** Other endpoint accounts of `targets` — offered as "reuse this password for …". */
   counterparts: string[];
 }

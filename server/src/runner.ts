@@ -14,7 +14,7 @@ import {
   vaultOfAccount,
 } from './config.js';
 import { bwInit, lockProfile, logoutProfile, listItems, listOrgCollections, InitResult } from './session.js';
-import { cachePassword, getPassword, clearAllPasswords } from './secrets.js';
+import { cachePassword, getPassword, hasPassword, clearAllPasswords } from './secrets.js';
 import { purgeVault } from './purge.js';
 import { reconcileOrgCollections } from './collections.js';
 import { computeDiff, evaluateGuard, toDiffItem, computeSecureDiff, DiffResult, DiffItem, SecureDiffResult } from './diff.js';
@@ -66,6 +66,13 @@ export interface CredentialPrompt {
    * rather than because a login already came back asking for one.
    */
   otpHinted?: boolean;
+  /**
+   * The code field may be left empty: the profile only needs unlocking, and the code is only
+   * used if the saved sign-in turns out to have expired (see InitResult.otpOptional).
+   */
+  otpOptional?: boolean;
+  /** A password is already cached for this account — the field may be left empty to reuse it. */
+  passwordCached?: boolean;
   /** The other endpoint accounts of `targets`, offered as "reuse this password for …". */
   counterparts: string[];
 }
@@ -435,6 +442,13 @@ export function submitCredentials(
   const resolver = credentialResolvers.get(`${jobId}:${accountKey}`);
   if (typeof resolver !== 'function') return false;
   const job = jobs.get(jobId);
+  // An empty password means "use the one already cached" — only offered on a code-only prompt.
+  // (An empty string reaching the resolver means cancel, so never pass one through.)
+  if (!password) {
+    const cached = job?.prompt?.kind === 'credentials' && job.prompt.passwordCached ? getPassword(accountKey) : undefined;
+    if (!cached) return false;
+    password = cached;
+  }
   cachePassword(accountKey, password);
   if (reuseForCounterparts && job?.prompt?.kind === 'credentials') {
     for (const other of job.prompt.counterparts) cachePassword(other, password);
@@ -505,8 +519,7 @@ async function waitForCredentials(
   config: Config,
   accountKey: string,
   targets: string[],
-  needsOtp: boolean,
-  otpHinted: boolean,
+  ask: { needsOtp: boolean; otpHinted: boolean; otpOptional: boolean; passwordCached: boolean },
 ): Promise<{ password: string; otp?: string; otpMethod?: number }> {
   return new Promise((resolve, reject) => {
     const limitMs = confirmTimeoutMs(job.options);
@@ -539,9 +552,11 @@ async function waitForCredentials(
       targets,
       vaultKey: vault.key,
       vaultName: vault.name,
-      needsOtp,
+      needsOtp: ask.needsOtp,
       ...(account.otpMethod !== undefined ? { otpMethod: account.otpMethod } : {}),
-      ...(otpHinted ? { otpHinted: true } : {}),
+      ...(ask.otpHinted ? { otpHinted: true } : {}),
+      ...(ask.otpOptional ? { otpOptional: true } : {}),
+      ...(ask.passwordCached ? { passwordCached: true } : {}),
       counterparts: counterpartAccounts(targets, config, accountKey),
     };
     job.prompt = prompt;
@@ -590,14 +605,22 @@ async function loginWithRetry(opts: {
     updateJobState(job, 'awaiting-credentials');
     updateStep(job, stepId, { state: 'awaiting-input' });
     // A code is asked for either because a login attempt came back wanting one, or because
-    // the account is configured as needing one and this profile is headed for a full login —
-    // the latter is what saves the user a second trip through the modal.
-    const hinted = result.reason === 'needs-password' && result.otpExpected === true;
-    const creds = await waitForCredentials(job, config, account, groupTargets, result.reason === 'needs-otp' || hinted, hinted);
+    // the account is configured as needing one — required when this profile is headed for a
+    // full login, optional when it only needs unlocking (the saved sign-in may have expired,
+    // and then the unlock becomes a login). Either way one submit is enough.
+    const otpOptional = result.reason === 'needs-password' && result.otpOptional === true;
+    const hinted = result.reason === 'needs-password' && (result.otpExpected === true || otpOptional);
+    const creds = await waitForCredentials(job, config, account, groupTargets, {
+      needsOtp: result.reason === 'needs-otp' || hinted,
+      otpHinted: hinted,
+      otpOptional,
+      passwordCached: result.reason === 'needs-otp' && result.passwordCached === true && hasPassword(account),
+    });
     result = await bwInit({
       ...initOpts,
-      ...(creds.otp !== undefined ? { otp: creds.otp } : {}),
-      ...(creds.otpMethod !== undefined ? { otpMethod: creds.otpMethod } : {}),
+      // An optional code field left empty arrives as '' — that means "no code", not `--code ''`.
+      ...(creds.otp ? { otp: creds.otp } : {}),
+      ...(creds.otp && creds.otpMethod !== undefined ? { otpMethod: creds.otpMethod } : {}),
     });
     updateJobState(job, 'running');
     updateStep(job, stepId, { state: 'running' });
