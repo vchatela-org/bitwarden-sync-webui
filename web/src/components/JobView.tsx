@@ -1,11 +1,9 @@
 import { useState, useEffect, useCallback } from 'react';
 import { ArrowLeft, Ban, AlertCircle, X, Minus, Plus, GitCompareArrows, ShieldCheck, ShieldAlert } from 'lucide-react';
-import { Job, Prompt, CredentialPrompt, ConfirmationPrompt, Step, LogLine, DiffItem, CredentialDiffItem, SecureDiffResult } from '../types.js';
+import { Job, Step, LogLine, DiffItem, CredentialDiffItem, SecureDiffResult } from '../types.js';
 import { getJob, cancelJob, openJobStream } from '../api.js';
 import { StepGraph } from './StepGraph.js';
 import { Terminal } from './Terminal.js';
-import { CredentialModal } from './CredentialModal.js';
-import { ConfirmModal } from './ConfirmModal.js';
 import { Button } from './ui/Button.js';
 import { Card } from './ui/Card.js';
 import { Badge, StatusLabel } from './ui/Badge.js';
@@ -68,9 +66,6 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
             ...(jUpdate.secureDiffResults !== undefined ? { secureDiffResults: jUpdate.secureDiffResults } : {}),
           };
         });
-      } else if (msg.type === 'prompt') {
-        const prompt = msg.data as Prompt | null;
-        setJob((prev) => prev ? { ...prev, prompt: prompt ?? undefined } : prev);
       }
     };
 
@@ -95,7 +90,6 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
 
   if (!job) return <LoadingPane label="Loading job…" />;
 
-  const prompt = job.prompt;
   const running = isActive(job.state);
   const duration = formatDuration(job.startedAt, job.endedAt);
   const selectedLabel = job.steps.find((s) => s.id === selectedStep)?.label;
@@ -188,23 +182,6 @@ export function JobView({ jobId, onBack, masked, onToggleMask }: Props) {
 
         <Terminal logs={job.logs} filterStep={selectedStep} height={terminalHeight} masked={masked} />
       </div>
-
-      {prompt?.kind === 'credentials' && (
-        <CredentialModal
-          jobId={jobId}
-          prompt={prompt as CredentialPrompt}
-          onSubmitted={() => setJob((prev) => prev ? { ...prev, prompt: undefined } : prev)}
-          masked={masked}
-        />
-      )}
-      {prompt?.kind === 'confirmation' && (
-        <ConfirmModal
-          jobId={jobId}
-          prompt={prompt as ConfirmationPrompt}
-          onSubmitted={() => setJob((prev) => prev ? { ...prev, prompt: undefined } : prev)}
-          masked={masked}
-        />
-      )}
 
       {/* ── Secure diff results ──────────────────────────────────────────── */}
       {job.secureDiffResults && Object.keys(job.secureDiffResults).length > 0 && (
