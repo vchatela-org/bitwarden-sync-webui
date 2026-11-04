@@ -52,8 +52,8 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
         jobId,
         prompt.accountKey,
         password,
-        prompt.needsOtp ? otp : undefined,
-        prompt.needsOtp ? otpMethod : undefined,
+        prompt.needsOtp && otp ? otp : undefined,
+        prompt.needsOtp && otp ? otpMethod : undefined,
         reuse,
       );
       onSubmitted();
@@ -72,7 +72,8 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
   }
 
   const formId = `credential-form-${jobId}`;
-  const canSubmit = !!password && (!prompt.needsOtp || !!otp);
+  const canSubmit =
+    (!!password || !!prompt.passwordCached) && (!prompt.needsOtp || !!prompt.otpOptional || !!otp);
 
   return (
     <Modal
@@ -123,14 +124,17 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
       }
     >
       <form id={formId} onSubmit={handleSubmit} className="space-y-3.5 pb-4">
-        <Field label="Master password" htmlFor="master-password">
+        <Field
+          label={prompt.passwordCached ? 'Master password (optional)' : 'Master password'}
+          htmlFor="master-password"
+        >
           <Input
             id="master-password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Vault master password"
-            autoFocus
+            placeholder={prompt.passwordCached ? 'Leave empty to reuse the one already entered' : 'Vault master password'}
+            autoFocus={!prompt.passwordCached}
             autoComplete="off"
           />
         </Field>
@@ -163,9 +167,13 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
               </Select>
             </Field>
 
-            <Field label="Verification code" htmlFor="otp-code">
+            <Field
+              label={prompt.otpOptional ? 'Verification code (recommended)' : 'Verification code'}
+              htmlFor="otp-code"
+            >
               <Input
                 id="otp-code"
+                autoFocus={!!prompt.passwordCached}
                 type="text"
                 value={otp}
                 onChange={(e) => setOtp(e.target.value)}
@@ -178,10 +186,23 @@ export function CredentialModal({ jobId, prompt, onSubmitted, masked }: Props) {
               />
             </Field>
 
-            {prompt.otpHinted && (
+            {prompt.otpHinted && !prompt.otpOptional && (
               <p className="-mt-1 text-[11px] leading-relaxed text-fg-faint">
                 This account is configured as requiring two-step login, so the code is asked for
                 up front. Enter it last — codes expire quickly.
+              </p>
+            )}
+            {prompt.otpOptional && (
+              <p className="-mt-1 text-[11px] leading-relaxed text-fg-faint">
+                This vault only needs unlocking, unless its saved sign-in has expired (it does after
+                a few weeks without a run) — then it needs a full login with a code. Enter the code
+                (last — codes expire quickly) and one submit covers both; leave it empty and an
+                expired sign-in asks again for the code alone.
+              </p>
+            )}
+            {prompt.passwordCached && (
+              <p className="-mt-1 text-[11px] leading-relaxed text-fg-faint">
+                The master password was already entered — only the code is needed.
               </p>
             )}
           </>
