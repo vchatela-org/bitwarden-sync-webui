@@ -14,7 +14,7 @@ import {
   vaultOfAccount,
 } from './config.js';
 import { bwInit, lockProfile, logoutProfile, listItems, listOrgCollections, InitResult } from './session.js';
-import { cachePassword, getPassword, clearAllPasswords } from './secrets.js';
+import { cachePassword, getPassword, hasPassword, clearAllPasswords } from './secrets.js';
 import { purgeVault } from './purge.js';
 import { reconcileOrgCollections } from './collections.js';
 import { computeDiff, evaluateGuard, toDiffItem, computeSecureDiff, DiffResult, DiffItem, SecureDiffResult } from './diff.js';
@@ -66,6 +66,13 @@ export interface CredentialPrompt {
    * rather than because a login already came back asking for one.
    */
   otpHinted?: boolean;
+  /**
+   * The code field may be left empty: the profile only needs unlocking, and the code is only
+   * used if the saved sign-in turns out to have expired (see InitResult.otpOptional).
+   */
+  otpOptional?: boolean;
+  /** A password is already cached for this account — the field may be left empty to reuse it. */
+  passwordCached?: boolean;
   /** The other endpoint accounts of `targets`, offered as "reuse this password for …". */
   counterparts: string[];
 }
@@ -120,6 +127,11 @@ function confirmTimeoutMs(options: JobOptions): number {
   if (requested < CONFIRM_TIMEOUT_MIN_MS) return CONFIRM_TIMEOUT_MIN_MS;
   if (requested > CONFIRM_TIMEOUT_MAX_MS) return CONFIRM_TIMEOUT_MAX_MS;
   return requested;
+}
+
+/** A timeout in the log's wording: minutes for real runs, seconds for short test timeouts. */
+function formatTimeout(ms: number): string {
+  return ms >= 60000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)} s`;
 }
 
 // In-memory state
@@ -398,6 +410,14 @@ function buildSteps(targets: string[], ops: JobOperation[], config: Config): Ste
 const credentialResolvers = new Map<string, (pw: string, otp?: string, otpMethod?: number) => void>();
 const confirmationResolvers = new Map<string, (decision: 'proceed' | 'skip' | 'abort') => void>();
 
+/**
+ * Jobs whose prompt went unanswered until its timeout. Nobody is at the keyboard, so there is
+ * no point prompting again for the next account — that is what made an abandoned run hold the
+ * single runner slot for one timeout per account (hours for a multi-account config). The run
+ * stops at the first timeout instead; a fresh run picks up when someone is there.
+ */
+const promptTimedOutJobs = new Set<string>();
+
 function clearPrompt(job: Job): void {
   if (!job.prompt) return;
   job.prompt = undefined;
@@ -422,6 +442,13 @@ export function submitCredentials(
   const resolver = credentialResolvers.get(`${jobId}:${accountKey}`);
   if (typeof resolver !== 'function') return false;
   const job = jobs.get(jobId);
+  // An empty password means "use the one already cached" — only offered on a code-only prompt.
+  // (An empty string reaching the resolver means cancel, so never pass one through.)
+  if (!password) {
+    const cached = job?.prompt?.kind === 'credentials' && job.prompt.passwordCached ? getPassword(accountKey) : undefined;
+    if (!cached) return false;
+    password = cached;
+  }
   cachePassword(accountKey, password);
   if (reuseForCounterparts && job?.prompt?.kind === 'credentials') {
     for (const other of job.prompt.counterparts) cachePassword(other, password);
@@ -492,15 +519,21 @@ async function waitForCredentials(
   config: Config,
   accountKey: string,
   targets: string[],
-  needsOtp: boolean,
-  otpHinted: boolean,
+  ask: { needsOtp: boolean; otpHinted: boolean; otpOptional: boolean; passwordCached: boolean },
 ): Promise<{ password: string; otp?: string; otpMethod?: number }> {
   return new Promise((resolve, reject) => {
+    const limitMs = confirmTimeoutMs(job.options);
     const timeout = setTimeout(() => {
       credentialResolvers.delete(`${job.id}:${accountKey}`);
       clearPrompt(job);
+      promptTimedOutJobs.add(job.id);
+      addLog(
+        job,
+        'app',
+        `⏱️ No answer to the ${accountKey} credential prompt within ${formatTimeout(limitMs)} — stopping this run instead of leaving the queue blocked.`,
+      );
       reject(new Error(`Credential prompt timed out for ${accountKey}`));
-    }, confirmTimeoutMs(job.options));
+    }, limitMs);
 
     credentialResolvers.set(`${job.id}:${accountKey}`, (pw: string, otp?: string, otpMethod?: number) => {
       clearTimeout(timeout);
@@ -519,9 +552,11 @@ async function waitForCredentials(
       targets,
       vaultKey: vault.key,
       vaultName: vault.name,
-      needsOtp,
+      needsOtp: ask.needsOtp,
       ...(account.otpMethod !== undefined ? { otpMethod: account.otpMethod } : {}),
-      ...(otpHinted ? { otpHinted: true } : {}),
+      ...(ask.otpHinted ? { otpHinted: true } : {}),
+      ...(ask.otpOptional ? { otpOptional: true } : {}),
+      ...(ask.passwordCached ? { passwordCached: true } : {}),
       counterparts: counterpartAccounts(targets, config, accountKey),
     };
     job.prompt = prompt;
@@ -570,14 +605,22 @@ async function loginWithRetry(opts: {
     updateJobState(job, 'awaiting-credentials');
     updateStep(job, stepId, { state: 'awaiting-input' });
     // A code is asked for either because a login attempt came back wanting one, or because
-    // the account is configured as needing one and this profile is headed for a full login —
-    // the latter is what saves the user a second trip through the modal.
-    const hinted = result.reason === 'needs-password' && result.otpExpected === true;
-    const creds = await waitForCredentials(job, config, account, groupTargets, result.reason === 'needs-otp' || hinted, hinted);
+    // the account is configured as needing one — required when this profile is headed for a
+    // full login, optional when it only needs unlocking (the saved sign-in may have expired,
+    // and then the unlock becomes a login). Either way one submit is enough.
+    const otpOptional = result.reason === 'needs-password' && result.otpOptional === true;
+    const hinted = result.reason === 'needs-password' && (result.otpExpected === true || otpOptional);
+    const creds = await waitForCredentials(job, config, account, groupTargets, {
+      needsOtp: result.reason === 'needs-otp' || hinted,
+      otpHinted: hinted,
+      otpOptional,
+      passwordCached: result.reason === 'needs-otp' && result.passwordCached === true && hasPassword(account),
+    });
     result = await bwInit({
       ...initOpts,
-      ...(creds.otp !== undefined ? { otp: creds.otp } : {}),
-      ...(creds.otpMethod !== undefined ? { otpMethod: creds.otpMethod } : {}),
+      // An optional code field left empty arrives as '' — that means "no code", not `--code ''`.
+      ...(creds.otp ? { otp: creds.otp } : {}),
+      ...(creds.otp && creds.otpMethod !== undefined ? { otpMethod: creds.otpMethod } : {}),
     });
     updateJobState(job, 'running');
     updateStep(job, stepId, { state: 'running' });
@@ -595,11 +638,18 @@ async function loginWithRetry(opts: {
 
 async function waitForConfirmation(job: Job, target: string, diff: DiffResult): Promise<'proceed' | 'skip' | 'abort'> {
   return new Promise((resolve, reject) => {
+    const limitMs = confirmTimeoutMs(job.options);
     const timeout = setTimeout(() => {
       confirmationResolvers.delete(`${job.id}:${target}`);
       clearPrompt(job);
+      promptTimedOutJobs.add(job.id);
+      addLog(
+        job,
+        'app',
+        `⏱️ No answer to the ${target} confirmation within ${formatTimeout(limitMs)} — stopping this run instead of leaving the queue blocked.`,
+      );
       reject(new Error(`Confirmation timed out for ${target}`));
-    }, confirmTimeoutMs(job.options));
+    }, limitMs);
 
     confirmationResolvers.set(`${job.id}:${target}`, (decision: string) => {
       clearTimeout(timeout);
@@ -648,6 +698,13 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
    */
   const aborted = (): boolean => (job.state as string) === 'aborted';
 
+  /**
+   * Whether the phases below must not start any more work. A user cancel flips the state; an
+   * unanswered prompt sets promptTimedOutJobs, because re-prompting for every remaining account
+   * would keep the single runner slot busy long after it is clear nobody is there to answer.
+   */
+  const stopRequested = (): boolean => aborted() || promptTimedOutJobs.has(job.id);
+
   /** Marks every still-unfinished step matching a prefix, e.g. after a login failure. */
   const skipPending = (prefix: string, detail: string): void => {
     for (const s of job.steps) {
@@ -661,7 +718,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
     // One iteration per source account: a single `bw login` on the source side, covering that
     // account's personal sync plus any org syncs exported through it.
     for (const [srcAccount, groupSyncs] of groupSyncsByAccount(job.targets, config, 'from')) {
-      if (aborted()) break;
+      if (stopRequested()) break;
       const srcCfg = accountByKey(config, srcAccount);
       const srcVault = vaultOfAccount(config, srcAccount);
       addLog(job, 'app', `\n====== ${srcAccount} (${srcCfg.email}) on ${srcVault.name} — syncs: ${groupSyncs.join(', ')} ======`);
@@ -701,7 +758,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           updateStep(job, `${srcAccount}:backup:sync`, { state: 'succeeded' });
 
           for (const target of groupSyncs) {
-            if (aborted()) break;
+            if (stopRequested()) break;
             const sync = syncByKey(config, target);
             const isOrg = !!sync.org;
             const orgId = syncOrgId(config, sync, srcVault.key);
@@ -796,9 +853,9 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
       // ─── IMPORT PHASE ──────────────────────────────────────────────────────
       // The destination side can fan out: two syncs sharing a source account may target
       // different destination accounts, each needing its own login.
-      if (doImport && !aborted()) {
+      if (doImport && !stopRequested()) {
         for (const [destAccount, dSyncs] of groupSyncsByAccount(groupSyncs, config, 'to')) {
-          if (aborted()) break;
+          if (stopRequested()) break;
           const destCfg = accountByKey(config, destAccount);
           const destVault = vaultOfAccount(config, destAccount);
 
@@ -827,7 +884,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           updateStep(job, `${srcAccount}:import:${destAccount}:sync`, { state: 'succeeded' });
 
           for (const target of dSyncs) {
-            if (aborted()) break;
+            if (stopRequested()) break;
             const sync = syncByKey(config, target);
             const isOrg = !!sync.org;
             const destOrgId = syncOrgId(config, sync, destVault.key);
@@ -893,6 +950,11 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
                   confirmDecision = 'abort';
                 }
 
+                // A timeout is not a user decision: stop here and let the run end as
+                // 'failed' with the timeout in its log, rather than 'aborted' as if the
+                // user had pressed Cancel.
+                if (promptTimedOutJobs.has(job.id)) break;
+
                 updateJobState(job, 'running');
 
                 if (confirmDecision === 'abort') {
@@ -916,7 +978,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             // verify below is one destructive unit — stopping between them would leave the
             // destination emptied with nothing imported back into it — so a cancel arriving
             // after this line is honoured only once that unit has run to completion.
-            if (aborted()) break;
+            if (stopRequested()) break;
 
             // Purge
             const purgeId = `${srcAccount}:import:${target}:purge`;
@@ -982,7 +1044,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateStep(job, verifyId, { state: 'succeeded', detail: `${verifyCount} items` });
 
             // Reconcile collections (org only)
-            if (isOrg && !aborted()) {
+            if (isOrg && !stopRequested()) {
               const reconcileId = `${srcAccount}:import:${target}:reconcile`;
               updateStep(job, reconcileId, { state: 'running' });
               try {
@@ -1020,12 +1082,12 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
       }
 
       // ─── COUNT PHASE (live item counts, no export) ─────────────────────────
-      if (doCount && !aborted()) {
+      if (doCount && !stopRequested()) {
         for (const role of ['source', 'dest'] as const) {
-          if (aborted()) break;
+          if (stopRequested()) break;
           const byAccount = groupSyncsByAccount(groupSyncs, config, role === 'source' ? 'from' : 'to');
           for (const [account, aSyncs] of byAccount) {
-            if (aborted()) break;
+            if (stopRequested()) break;
             const vault = vaultOfAccount(config, account);
 
             const loginStepId = `${srcAccount}:count:${role}:${account}:login`;
@@ -1058,7 +1120,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateStep(job, `${srcAccount}:count:${role}:${account}:sync`, { state: 'succeeded' });
 
             for (const target of aSyncs) {
-              if (aborted()) break;
+              if (stopRequested()) break;
               const sync = syncByKey(config, target);
               const isOrg = !!sync.org;
               const orgId = syncOrgId(config, sync, vault.key);
@@ -1085,7 +1147,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
       }
 
       // ─── DIFF PHASE (secure credential comparison, no clear-text leaves memory) ─
-      if (doDiff && !aborted()) {
+      if (doDiff && !stopRequested()) {
         // Step 1: snapshot source vault — list all items, hash credentials, discard raw data
         const srcVaultDir = profileDir(config.bitwardenConfigDir, srcAccount);
 
@@ -1119,7 +1181,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
           // Collect source snapshots per target (raw items in memory only, never persisted)
           const srcSnapshots = new Map<string, Array<Record<string, unknown>>>();
           for (const target of groupSyncs) {
-            if (aborted()) break;
+            if (stopRequested()) break;
             const sync = syncByKey(config, target);
             const isOrg = !!sync.org;
             const orgId = syncOrgId(config, sync, srcVault.key);
@@ -1144,7 +1206,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
 
           // Step 2: snapshot each destination vault, then compute hashed diff immediately
           for (const [destAccount, dSyncs] of groupSyncsByAccount(groupSyncs, config, 'to')) {
-            if (aborted()) break;
+            if (stopRequested()) break;
             const destVault = vaultOfAccount(config, destAccount);
             const dstVaultDir = profileDir(config.bitwardenConfigDir, destAccount);
 
@@ -1176,7 +1238,7 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
             updateStep(job, `${srcAccount}:diff:dst:${destAccount}:sync`, { state: 'succeeded' });
 
             for (const target of dSyncs) {
-              if (aborted()) break;
+              if (stopRequested()) break;
               const sync = syncByKey(config, target);
               const isOrg = !!sync.org;
               const orgId = syncOrgId(config, sync, destVault.key);
@@ -1245,6 +1307,10 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
     clearAllSecrets();
     if (aborted()) {
       // state already set
+    } else if (promptTimedOutJobs.has(job.id)) {
+      // Stopped rather than left waiting on the remaining accounts: the run did not fail on
+      // its own, but it also did not complete, so 'failed' is the honest state.
+      updateJobState(job, 'failed');
     } else if (anyFailed) {
       updateJobState(job, 'partial');
     } else {
@@ -1261,11 +1327,13 @@ async function runJobAsync(jobId: string, config: Config): Promise<void> {
     // them so a finished job never shows work still in progress. A clean run has nothing
     // left to settle, so this is a no-op there.
     let stoppedBecause = 'Job ended before this step ran';
-    if (aborted()) stoppedBecause = 'Job cancelled';
+    if (promptTimedOutJobs.has(job.id)) stoppedBecause = 'Stopped: no answer to the prompt';
+    else if (aborted()) stoppedBecause = 'Job cancelled';
     else if (job.state === 'failed') stoppedBecause = 'Job failed';
     markRemainingSkipped(job, stoppedBecause);
 
     currentStep.delete(job.id);
+    promptTimedOutJobs.delete(job.id);
     persistJob(job);
     activeJobId = null;
 

@@ -1,10 +1,8 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import {
   BackupSet,
-  CredentialPrompt,
   Job,
   JobState,
-  Prompt,
   TargetStatus,
 } from '../types.js';
 import {
@@ -16,7 +14,6 @@ import {
   LiveCountEntry,
   LiveCountUpdate,
 } from '../api.js';
-import { CredentialModal } from '../components/CredentialModal.js';
 import { isActive } from '../lib/status.js';
 
 export type LiveCounts = Record<string, LiveCountEntry>;
@@ -69,7 +66,6 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
   const [selectedTargets, setSelectedTargets] = useState<Set<string>>(new Set());
   const [error, setError] = useState('');
   const [countJobId, setCountJobId] = useState<string | null>(null);
-  const [countJob, setCountJob] = useState<Job | null>(null);
   const [countLoading, setCountLoading] = useState(false);
   const [runJobId, setRunJobId] = useState<string | null>(null);
 
@@ -145,7 +141,6 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
       } finally {
         setCountLoading(false);
         setCountJobId(null);
-        setCountJob(null);
       }
     }
 
@@ -154,14 +149,9 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
       if (msg.type === 'counts' && msg.data) {
         applyLiveCount(msg.data as LiveCountUpdate);
       } else if (msg.type === 'snapshot' && msg.job) {
-        setCountJob(msg.job);
         if (!isActive(msg.job.state)) finish();
-      } else if (msg.type === 'prompt') {
-        const prompt = msg.data as Prompt | null;
-        setCountJob((prev) => prev ? { ...prev, prompt: prompt ?? undefined } : prev);
       } else if (msg.type === 'job' && msg.data) {
         const upd = msg.data as { state: JobState };
-        setCountJob((prev) => prev ? { ...prev, state: upd.state } : prev);
         if (!isActive(upd.state)) finish();
       }
     };
@@ -242,20 +232,9 @@ export function DashboardDataProvider({ children }: { children: React.ReactNode 
     selectedTargets, error,
   ]);
 
-  const countPrompt: Prompt | undefined = countJob?.prompt;
-
   return (
     <DashboardDataContext.Provider value={value}>
       {children}
-      {/* Rendered here rather than in Dashboard so the count job stays answerable
-          from any page. */}
-      {countPrompt?.kind === 'credentials' && countJobId && (
-        <CredentialModal
-          jobId={countJobId}
-          prompt={countPrompt as CredentialPrompt}
-          onSubmitted={() => setCountJob((prev) => prev ? { ...prev, prompt: undefined } : prev)}
-        />
-      )}
     </DashboardDataContext.Provider>
   );
 }

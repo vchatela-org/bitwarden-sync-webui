@@ -5,6 +5,7 @@ import { Header, type Page } from './components/Header.js';
 import { Dashboard } from './components/Dashboard.js';
 import { JobView } from './components/JobView.js';
 import { JobList } from './components/JobList.js';
+import { GlobalPrompt } from './components/GlobalPrompt.js';
 import { BackupsPage } from './components/BackupsPage.js';
 import { LoadingPane, TooltipProvider, EmptyState } from './components/ui/Feedback.js';
 import { DashboardDataProvider } from './state/DashboardData.js';
@@ -131,6 +132,11 @@ export default function App() {
 
             {page === 'backups' && config && <BackupsPage config={config} />}
           </main>
+
+          {/* A job waiting for credentials/confirmation must be answerable from wherever the
+              user is — Dashboard, Jobs list, another job, Backups — or it sits until the
+              timeout with the queue behind it. */}
+          <GlobalPrompt masked={maskSensitive} />
         </div>
       </DashboardDataProvider>
     </TooltipProvider>

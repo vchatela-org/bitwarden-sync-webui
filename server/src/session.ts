@@ -32,6 +32,19 @@ export type InitResult =
        * the CLI is going to ignore.
        */
       otpExpected?: boolean;
+      /**
+       * Set on 'needs-password' when the profile only needs unlocking but the account is
+       * configured `otp: "required"`. The saved sign-in behind an unlock expires on the server
+       * after a few weeks unused, and then the unlock turns into a full login that does need a
+       * code — so the prompt offers the code field as optional: fill it and one submit covers
+       * both outcomes, leave it and an expired sign-in costs a second (code-only) prompt.
+       */
+      otpOptional?: boolean;
+      /**
+       * Set on 'needs-otp': the password is already cached for this account, so the prompt
+       * only has to ask for the code.
+       */
+      passwordCached?: boolean;
     };
 
 export async function getBwStatus(profileDir: string, log?: LogCallback): Promise<BwStatus> {
@@ -105,6 +118,7 @@ export async function bwInit(opts: {
         reason: 'needs-password',
         message: `Password required for ${accountKey}`,
         otpExpected: opts.otpRequired === true && willLogin,
+        otpOptional: opts.otpRequired === true && !willLogin,
       };
     }
 
@@ -123,12 +137,37 @@ export async function bwInit(opts: {
 
     log?.('app' as never, `[${profileLabel}] Status: ${currentStatus}`);
 
-    // 3. Login or unlock
+    // 3. Unlock, falling back to a fresh login when the saved sign-in has expired
     let sessionKey = '';
     let loginFailed = false;
-    let needsOtp = false;
+
+    if (currentStatus !== 'unauthenticated' && currentStatus !== 'locked' && currentStatus !== 'unlocked') {
+      return { ok: false, reason: 'failed', message: `Unknown status: ${currentStatus}` };
+    }
+
+    if (currentStatus === 'locked' || currentStatus === 'unlocked') {
+      const result = await runBw(['unlock', '--raw'], { profileDir, fifoPassword: pw, timeout: 30000 }, log);
+      if (result.exitCode === 0 && isValidSessionKey(result.stdout.trim())) {
+        sessionKey = result.stdout.trim();
+      } else if (await signInExpired(result, profileDir, log)) {
+        // Not a wrong password: the server refused the stored refresh token (invalid_grant)
+        // and the CLI dropped back to unauthenticated. Keep the password and log in again
+        // right here, with the code if the prompt collected one — before this, the run
+        // discarded the (correct) password and re-prompted twice: once for it, once for the code.
+        log?.('app' as never, `[${profileLabel}] Saved sign-in has expired on the server — logging in again`);
+        await runBw(['logout'], { profileDir, timeout: 10000 }, log);
+        currentStatus = 'unauthenticated';
+      } else {
+        loginFailed = true;
+      }
+    }
 
     if (currentStatus === 'unauthenticated') {
+      if (opts.otp === undefined && opts.otpRequired === true) {
+        // The CLI is certain to answer "Code is required." — ask for the code without
+        // spending a login attempt, and without asking for the password again.
+        return { ok: false, reason: 'needs-otp', message: `OTP required for ${profileLabel}`, passwordCached: true };
+      }
       const args = ['login', email, '--raw'];
       if (opts.otp !== undefined) {
         args.push('--method', String(opts.otpMethod ?? 0), '--code', opts.otp);
@@ -142,25 +181,16 @@ export async function bwInit(opts: {
         // e.g. TOTP-only accounts, auto-selected) or "Login failed. No provider selected."
         // (multiple providers, no --method given).
         const out = `${result.stdout}\n${result.stderr}`;
-        if (/two-step|2fa|code is required|no provider selected|no providers available/i.test(out)) {
-          needsOtp = true;
-        } else {
-          loginFailed = true;
+        if (!opts.otp && /two-step|2fa|code is required|no provider selected|no providers available/i.test(out)) {
+          return { ok: false, reason: 'needs-otp', message: `OTP required for ${profileLabel}`, passwordCached: true };
         }
-      }
-    } else if (currentStatus === 'locked' || currentStatus === 'unlocked') {
-      const result = await runBw(['unlock', '--raw'], { profileDir, fifoPassword: pw, timeout: 30000 }, log);
-      if (result.exitCode === 0 && isValidSessionKey(result.stdout.trim())) {
-        sessionKey = result.stdout.trim();
-      } else {
+        if (opts.otp && /two-step token is invalid/i.test(out)) {
+          // A mistyped or expired code says nothing about the password — ask for the code only.
+          log?.('app' as never, `[${profileLabel}] Two-step code rejected (attempt ${attempt}/${MAX_ATTEMPTS})`);
+          return { ok: false, reason: 'needs-otp', message: `Two-step code rejected for ${profileLabel}`, passwordCached: true };
+        }
         loginFailed = true;
       }
-    } else {
-      return { ok: false, reason: 'failed', message: `Unknown status: ${currentStatus}` };
-    }
-
-    if (needsOtp && !opts.otp) {
-      return { ok: false, reason: 'needs-otp', message: `OTP required for ${profileLabel}` };
     }
 
     if (loginFailed || !sessionKey) {
@@ -204,6 +234,16 @@ export async function bwInit(opts: {
   }
 
   return { ok: false, reason: 'max-attempts', message: 'Max attempts reached' };
+}
+
+/**
+ * After a failed `bw unlock`: true when the failure is the server rejecting the stored sign-in
+ * (refresh token expired or revoked) rather than a wrong password. The CLI reports it as an
+ * unhandled `invalid_grant` rejection and leaves the profile unauthenticated.
+ */
+async function signInExpired(result: BwResult, profileDir: string, log?: LogCallback): Promise<boolean> {
+  if (/invalid_grant/i.test(`${result.stdout}\n${result.stderr}`)) return true;
+  return (await getBwStatus(profileDir, log)).status === 'unauthenticated';
 }
 
 export async function lockProfile(profileDir: string, log?: LogCallback): Promise<void> {

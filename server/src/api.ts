@@ -33,6 +33,7 @@ import {
   setGlobalConfig,
   Job,
 } from './runner.js';
+import { hasPassword } from './secrets.js';
 import {
   inventoryBackups,
   planRetention,
@@ -258,8 +259,14 @@ export function createApp(configResult: ConfigLoadResult): ReturnType<typeof cre
       otpMethod?: number;
       reuseForCounterparts?: boolean;
     };
-    if (!accountKey || !password) {
+    // An empty password is allowed only on a prompt that says one is already cached
+    // (submitCredentials enforces that and answers 409 otherwise).
+    if (!accountKey || typeof password !== 'string') {
       res.status(400).json({ error: 'accountKey and password required' });
+      return;
+    }
+    if (!password && !(job.prompt?.kind === 'credentials' && job.prompt.passwordCached && hasPassword(accountKey))) {
+      res.status(400).json({ error: 'Enter the master password — no cached password to reuse for this account' });
       return;
     }
     const ok = submitCredentials(job.id, accountKey, password, otp, otpMethod, reuseForCounterparts === true);
