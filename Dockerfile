@@ -59,7 +59,15 @@ RUN BW_CLI_VERSION="${BW_CLI_VERSION:-$(node -p "require('/tmp/bw-cli-pin.json')
  # unchanged in 0.2.x, so deleting that shadow copy is safe: Node's module
  # resolution then walks up to the patched version above it, leaving a single
  # fixed copy on disk instead of a second vulnerable one hiding behind it.
- && npm install tmp@^0.2.6 --no-save --prefix /usr/local/lib/node_modules/@bitwarden/cli \
+ #
+ # CVE-2026-113872 / CVE-2026-118779..119190: @bitwarden/cli's own dependency
+ # tree pins multer 2.3.0 and node-forge 1.4.0, both of which the image scan
+ # reports as high. The CLI is the latest release and upstream has not bumped
+ # them yet, so install the fixed releases over its tree the same way. Both are
+ # hoisted at the top of the CLI's node_modules with no shadow copy below, and
+ # the CLI's own package.json specs are only used at publish time, never at
+ # runtime: `bw` loads the modules that are actually on disk.
+ && npm install tmp@^0.2.6 multer@^2.5.0 node-forge@^1.4.1 --no-save --prefix /usr/local/lib/node_modules/@bitwarden/cli \
  && rm -rf /usr/local/lib/node_modules/@bitwarden/cli/node_modules/external-editor/node_modules/tmp \
  && npm uninstall -g npm corepack \
  && rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack /root/.npm \
